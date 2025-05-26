@@ -6,6 +6,9 @@ const { v4: uuidv4 } = require('uuid');
 const CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION = `
 You are a data generation assistant. Your ONLY task is to provide concise, raw data examples based on the user's request, suitable for populating fields on a card.
 - Output must be like problem-solving game.
+- Alway change scenarios and also don't include answers.
+- keep the questions basic and non-conceptual.
+- keep the game level to most basic.
 - Output ONLY the requested data items.
 - Each distinct data item should be on a new line.
 - Do NOT include any titles, headings, explanations, introductions, summaries, or conversational text (e.g., "Here are some examples:", "I hope this helps!").
@@ -15,16 +18,8 @@ You are a data generation assistant. Your ONLY task is to provide concise, raw d
 - Think of your output as directly filling a spreadsheet or a list on a game card.
 - Adhere strictly to these formatting and content rules.
 `;
-const DEFAULT_PLACEHOLDER_IMAGE_URL = "https://i.pinimg.com/736x/c6/2a/3e/c62a3e65a0c8c38ef695144b447cd7dc.jpg";
-// const PREDEFINED_IMAGE_URLS = [
-//     "https://i.pinimg.com/736x/c6/2a/3e/c62a3e65a0c8c38ef695144b447cd7dc.jpg",
-//     "https://i.pinimg.com/736x/b5/1c/99/b51c99f3d03d029d1dea464b89b4329c.jpg",
-//     "https://image.slidesdocs.com/responsive-images/docs/stationery-for-education-in-a-bubble-page-border-background-word-template_3737a7d4a6__1131_1600.jpg",
-//     "https://image.slidesdocs.com/responsive-images/docs/simplifying-math-with-a-touch-of-green-page-border-background-word-template_3241e560c8__1131_1600.jpg",
-//     "https://clipart-library.com/images/pi7r57ndT.jpg",
-//     "https://i.pinimg.com/736x/bb/94/11/bb94116a9f46a6e4a54533f082bf4cfb.jpg",
-//     "https://wallpapers.com/images/hd/school-picture-background-3w7ny3s5pak6kw2l.jpg"
-// ];
+
+
 
 exports.generateCardWithAI = async (req, res) => {
     try {
@@ -268,201 +263,6 @@ exports.generateFullCardFromPromptOld = async (req, res) => {
             cardName = "AI Generated Full Card",
             cardWidthPx = 512,
             cardHeightPx = 768,
-            imageAspectRatio = null, // This is the user's direct input, could be null or an unsupported string
-            imageOutputFormat = "png",
-            numItemsToGenerate = 1,
-            forcePredefinedImage,
-            defaultTextColor = "#333333"
-        } = req.body;
-
-        if (!userPrompt || userPrompt.trim() === '') {
-            return res.status(400).json({ message: "A user prompt is required." });
-        }
-
-        // Determine if we should use predefined images
-        const usePredefinedImages = forcePredefinedImage === true || // If client explicitly requests it
-                                   process.env.USE_PREDEFINED_IMAGES === 'true' || // Or if env var is set
-                                   !process.env.STABILITY_API_KEY; // Or if Stability key is missing (good for dev)
-
-        if (usePredefinedImages) {
-            console.log("Condition met to use predefined images or fallback due to config.");
-        }
-
-        const imagePromptForStability = `${userPrompt}, card art, detailed, high quality, digital illustration`;
-
-        const supportedStabilityRatios = [
-            { string: "21:9", value: 21 / 9 }, { string: "16:9", value: 16 / 9 },
-            { string: "3:2", value: 3 / 2 }, { string: "5:4", value: 5 / 4 },
-            { string: "1:1", value: 1 / 1 }, { string: "4:5", value: 4 / 5 },
-            { string: "2:3", value: 2 / 3 }, { string: "9:16", value: 9 / 16 },
-            { string: "9:21", value: 9 / 21 }
-        ];
-
-        // Declare aspectRatioForAI here so it's in scope for the whole try block
-        let aspectRatioForAI; // <<<<<<<<<<<<<<<<<<< DECLARED HERE
-
-        if (imageAspectRatio && supportedStabilityRatios.some(r => r.string === imageAspectRatio)) {
-            aspectRatioForAI = imageAspectRatio; // <<<<<<<<<<<<<<<<<<< ASSIGNED HERE
-            console.log(`Using user-provided valid imageAspectRatio for AI: ${aspectRatioForAI}`);
-        } else {
-            if (imageAspectRatio) { // Log if user provided an unsupported one
-                console.warn(`User-provided imageAspectRatio "${imageAspectRatio}" is not directly supported or is invalid. Calculating closest match from card dimensions.`);
-            }
-            aspectRatioForAI = getClosestSupportedAspectRatio(cardWidthPx, cardHeightPx, supportedStabilityRatios); // <<<<<< ASSIGNED HERE
-        }
-
-        // Now aspectRatioForAI is guaranteed to be defined and one of the supported strings
-        const textPromptForGemini = `User Request: Generate ${numItemsToGenerate} concise dummy data item(s) for a printable card related to "${userPrompt}". The card dimensions are approximately ${cardWidthPx}px wide and ${cardHeightPx}px tall. The visual theme aims for an aspect ratio of ${aspectRatioForAI}.\n\nData Items:`;
-        //                                                                                                                                                                                           ^^^^^^^^^^^^^^^^^^ USED HERE
-
-        // --- 2. Call AI Services / Get Predefined Image ---
-        let generatedImageDataUri = null; // This will now be a URL string or data URI
-        let generatedTextData = null;
-        let imageGenerationError = null;
-        let textGenerationError = null;
-        let imageIsFromPredefined = false;
-
-        let imagePromise;
-
-        if (usePredefinedImages || PREDEFINED_IMAGE_URLS.length > 0 && !process.env.STABILITY_API_KEY /* Another condition example */) {
-            console.log("Using predefined image URL.");
-            if (PREDEFINED_IMAGE_URLS.length > 0) {
-                const randomIndex = Math.floor(Math.random() * PREDEFINED_IMAGE_URLS.length);
-                generatedImageDataUri = PREDEFINED_IMAGE_URLS[randomIndex];
-                imageIsFromPredefined = true;
-                imagePromise = Promise.resolve(generatedImageDataUri); // Resolve immediately
-            } else {
-                console.warn("Attempted to use predefined images, but the list is empty. Using default placeholder.");
-                generatedImageDataUri = DEFAULT_PLACEHOLDER_IMAGE_URL;
-                imageIsFromPredefined = true; // Still considered "predefined" in terms of not calling AI
-                imageGenerationError = "Predefined image list is empty.";
-                imagePromise = Promise.resolve(generatedImageDataUri);
-            }
-        } else {
-            console.log("Attempting to generate image with Stability AI...");
-            imagePromise = aiService.generateImageWithStabilityAI(
-                imagePromptForStability,
-                imageOutputFormat,
-                aspectRatioForAI
-            ).catch(err => {
-                console.error("Stability AI Error (in parallel call):", err.message);
-                imageGenerationError = err.message || "Stability AI image generation failed.";
-                // Fallback to predefined if AI fails
-                if (PREDEFINED_IMAGE_URLS.length > 0) {
-                    console.log("Stability AI failed, falling back to predefined image URL.");
-                    const randomIndex = Math.floor(Math.random() * PREDEFINED_IMAGE_URLS.length);
-                    imageIsFromPredefined = true;
-                    return PREDEFINED_IMAGE_URLS[randomIndex]; // Return a predefined URL
-                }
-                imageIsFromPredefined = true; // No AI image, and no predefined, so it will be placeholder
-                return DEFAULT_PLACEHOLDER_IMAGE_URL; // Ultimate fallback
-            });
-        }
-
-        console.log("Attempting to generate text with Gemini AI...");
-        const textPromise = aiService.generateTextWithGemini(
-            textPromptForGemini,
-            undefined,
-            CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION
-        ).catch(err => {
-            console.error("Gemini AI Error (in parallel call):", err.message);
-            textGenerationError = err.message || "Gemini AI text generation failed.";
-            return null; // Allow Promise.all to resolve
-        });
-
-        // Wait for promises to settle
-        // The result of imagePromise will now be either a data URI from AI or a predefined URL string
-        [generatedImageDataUri, generatedTextData] = await Promise.all([imagePromise, textPromise]);
-
-
-        // --- 3. Handle AI Service Results ---
-        // generatedImageDataUri will always have a value here (either AI, predefined, or placeholder)
-        let imageSuccess = !imageGenerationError && !imageIsFromPredefined; // True only if AI generated successfully
-        let textSuccess = !!generatedTextData && !textGenerationError;
-
-        // If using predefined or placeholder, imageGenerationError might be set from the catch block
-        // or it might be null if we directly chose a predefined image.
-        // The key is that `generatedImageDataUri` will have a value.
-
-        if (!generatedImageDataUri && !textSuccess) { // Only if generatedImageDataUri somehow became null AND text failed
-            return res.status(502).json({ /* ... both failed (less likely for image now) ... */ });
-        }
-
-        let finalImageUrl = generatedImageDataUri; // Already holds AI, predefined, or placeholder
-        let finalTextContent = textSuccess ? generatedTextData : `[Text generation failed: ${textGenerationError || 'Unknown'}]`;
-
-        // --- 4. Construct Card Elements & Save Card ---
-        const elements = [];
-        elements.push({
-            elementId: uuidv4(), type: 'image', imageUrl: finalImageUrl, // This is now a URL or data URI
-            x: 0, y: 0, width: cardWidthPx, height: cardHeightPx, zIndex: 0, rotation: 0
-        });
-        // ... (text element construction remains the same as your last working version) ...
-        const textPaddingHorizontal = Math.round(cardWidthPx * 0.1);
-        let textBlockHeight = imageIsFromPredefined || imageGenerationError ? Math.round(cardHeightPx * 0.80) : Math.round(cardHeightPx * 0.45);
-        textBlockHeight = Math.max(30, textBlockHeight);
-        const textBlockWidth = cardWidthPx - (2 * textPaddingHorizontal);
-        const textBlockX = textPaddingHorizontal;
-        const textBlockY = Math.round((cardHeightPx - textBlockHeight) / 2);
-        // const textBlockY = Math.round((cardHeightPx - 50) / 2);
-
-       elements.push({
-            elementId: uuidv4(),
-            type: 'text',
-            content: finalTextContent,
-            x: textBlockX,
-            y: textBlockY,
-            width: textBlockWidth,
-            height: textBlockHeight,
-            fontSize: "22px",
-            fontFamily: "Arial",
-            color: defaultTextColor, // <<<< USE THE INCOMING TEXT COLOR HERE
-            textAlign: "center",
-            zIndex: 1,
-            rotation: 0
-        });
-
-        const newCard = new Card({
-            name: cardName,
-            promptUsed: userPrompt,
-            widthPx: cardWidthPx,
-            heightPx: cardHeightPx,
-            elements: elements,
-            metadata: {
-                imageGenAspectRatio: aspectRatioForAI,
-                outputFormat: (finalImageUrl && finalImageUrl.startsWith('data:image/'))
-                                ? (finalImageUrl.match(/^data:image\/([a-z]+);/i)?.[1] || imageOutputFormat)
-                                : (imageIsFromPredefined ? "predefined_url" : imageOutputFormat),
-                backgroundColor: '#FFFFFF', // Consider if this should also be influenced by theme color
-                selectedThemeColorHex: defaultTextColor, // Store the chosen text color
-                imageGenerationStatus: imageGenerationError ? `Failed: ${imageGenerationError}` : (imageIsFromPredefined ? "Predefined/Fallback" : "AI Success"),
-                textGenerationStatus: textGenerationError ? `Failed: ${textGenerationError}` : "Success"
-            }
-        });
-
-        await newCard.save();
-
-        res.status(201).json({
-            message: `Card generation complete. Image: ${imageGenerationError ? (imageIsFromPredefined ? 'Predefined Used after AI Fail' : 'Placeholder Used') : (imageIsFromPredefined ? 'Predefined Used' : 'AI OK')}. Text: ${textGenerationError ? 'Placeholder Used' : 'OK'}.`,
-            card: newCard,
-            imageWasAIgenerated: imageSuccess,
-            imageIsPredefined: imageIsFromPredefined,
-            textGeneratedSuccessfully: textSuccess
-        });
-
-    } catch (error) {
-        console.error("Error in generateFullCardFromPrompt Controller:", error.message, error.stack);
-        res.status(500).json({ message: "Error generating full card.", error: error.message });
-    }
-};
-
-exports.generateFullCardFromPrompt = async (req, res) => {
-    try {
-        const {
-            userPrompt,
-            cardName = "AI Generated Full Card",
-            cardWidthPx = 512,
-            cardHeightPx = 768,
             imageAspectRatio = null, // User can explicitly provide one of the supported strings for AI
             imageOutputFormat = "png",
             numItemsToGenerate = 1,
@@ -541,7 +341,7 @@ exports.generateFullCardFromPrompt = async (req, res) => {
         }
 
         // Determine the final image URL to be used for the card element
-        const finalImageUrl = aiImageGeneratedSuccessfully ? aiGeneratedImageDataUri : DEFAULT_PLACEHOLDER_IMAGE_URL;
+        const finalImageUrl = aiImageGeneratedSuccessfully ? aiGeneratedImageDataUri : "";
         const finalTextContent = textGeneratedSuccessfully ? generatedTextData : `[Text generation failed for: ${userPrompt} - ${textGenerationError || 'Unknown error'}]`;
 
         // --- 4. Construct Card Elements & Save Card ---
@@ -597,5 +397,176 @@ exports.generateFullCardFromPrompt = async (req, res) => {
     } catch (error) {
         console.error("Error in generateFullCardFromPrompt Controller:", error.message, error.stack);
         res.status(500).json({ message: "Error generating full card.", error: error.message });
+    }
+};
+
+function getClosestSupportedAspectRatio(width, height, supportedRatios) {
+    if (height === 0) return "1:1";
+    const targetRatio = width / height;
+    let closestRatioString = "1:1";
+    let smallestDifference = Infinity;
+    supportedRatios.forEach(ratioObj => {
+        const difference = Math.abs(targetRatio - ratioObj.value);
+        if (difference < smallestDifference) {
+            smallestDifference = difference;
+            closestRatioString = ratioObj.string;
+        }
+    });
+    console.log(`Target ratio for image: ${targetRatio.toFixed(2)}, Chosen supported Stability AI ratio string: ${closestRatioString}`);
+    return closestRatioString;
+}
+
+exports.generateFullCardFromPrompt = async (req, res) => {
+    try {
+        const {
+            userPrompt,
+            cardName = "AI Generated Card", // Base name for the deck
+            cardWidthPx = 512,
+            cardHeightPx = 768,
+            imageAspectRatio = null,
+            imageOutputFormat = "png",
+            numCardsInDeck = 1, // Received from frontend's "numItemsToGenerate"
+            defaultTextColor = "#333333"
+        } = req.body;
+
+        if (!userPrompt || userPrompt.trim() === '') {
+            return res.status(400).json({ message: "A user prompt is required." });
+        }
+        if (numCardsInDeck < 1 || numCardsInDeck > 50) { // Sensible limit for a single request
+            return res.status(400).json({ message: "Number of cards per deck must be between 1 and 50." });
+        }
+
+        const imagePromptForStability = `${userPrompt}, card art, detailed, high quality, digital illustration`;
+        const supportedStabilityRatios = [
+            { string: "21:9", value: 21/9 }, { string: "16:9", value: 16/9 }, { string: "3:2", value: 3/2 },
+            { string: "5:4", value: 5/4 }, { string: "1:1", value: 1/1 }, { string: "4:5", value: 4/5 },
+            { string: "2:3", value: 2/3 }, { string: "9:16", value: 9/16 }, { string: "9:21", value: 9/21 }
+        ];
+        let aspectRatioForAI;
+        if (imageAspectRatio && supportedStabilityRatios.some(r => r.string === imageAspectRatio)) {
+            aspectRatioForAI = imageAspectRatio;
+        } else {
+            aspectRatioForAI = getClosestSupportedAspectRatio(cardWidthPx, cardHeightPx, supportedStabilityRatios);
+        }
+
+        // Ask Gemini for a list of text items, one for each card
+        const textPromptForGemini = `User Request: Generate ${numCardsInDeck} distinct, concise data items suitable for individual game cards related to "${userPrompt}". Each item should be on a new line. The card dimensions are approximately ${cardWidthPx}px wide and ${cardHeightPx}px tall. The visual theme aims for an aspect ratio of ${aspectRatioForAI}.\n\nData Items List:`;
+
+        // --- 2. Call AI Services ---
+        let aiGeneratedImageDataUri = null;
+        let generatedTextListData = null; // This will hold the multi-line string from Gemini
+        let imageGenerationError = null;
+        let textGenerationError = null;
+
+        console.log("Attempting to generate base image with Stability AI...");
+        const imagePromise = aiService.generateImageWithStabilityAI(
+            imagePromptForStability, imageOutputFormat, aspectRatioForAI
+        ).catch(err => {
+            console.error("Stability AI Error:", err.message);
+            imageGenerationError = err.message || "Stability AI image generation failed.";
+            return null;
+        });
+
+        console.log("Attempting to generate text list with Gemini AI...");
+        const textPromise = aiService.generateTextWithGemini(
+            textPromptForGemini, undefined, CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION
+        ).catch(err => {
+            console.error("Gemini AI Error:", err.message);
+            textGenerationError = err.message || "Gemini AI text generation failed.";
+            return null;
+        });
+
+        [aiGeneratedImageDataUri, generatedTextListData] = await Promise.all([imagePromise, textPromise]);
+
+        // --- 3. Handle AI Service Results ---
+        const aiImageGeneratedSuccessfully = !!aiGeneratedImageDataUri;
+        const textListGeneratedSuccessfully = !!generatedTextListData;
+
+        if (!aiImageGeneratedSuccessfully && !textListGeneratedSuccessfully) {
+            return res.status(502).json({
+                message: "Both AI image and text generation failed.",
+                imageError: imageGenerationError, textError: textGenerationError
+            });
+        }
+
+        const finalBaseImageUrl = aiImageGeneratedSuccessfully ? aiGeneratedImageDataUri : "";
+        
+        let textItemsArray = [];
+        if (textListGeneratedSuccessfully) {
+            textItemsArray = generatedTextListData.split('\n').map(item => item.trim()).filter(item => item.length > 0);
+            console.log(`Gemini returned ${textItemsArray.length} text items for the deck.`);
+        } else {
+            console.warn("Text generation failed for list. Using placeholders for deck.");
+            for (let i = 0; i < numCardsInDeck; i++) {
+                textItemsArray.push(`[Placeholder text for card ${i + 1} of deck - Topic: ${userPrompt} - Error: ${textGenerationError || 'Unknown'}]`);
+            }
+        }
+        
+        // Ensure we have enough text items, or truncate if too many
+        const targetNumTexts = numCardsInDeck;
+        const finalTextsForCards = [];
+        for (let i = 0; i < targetNumTexts; i++) {
+            if (i < textItemsArray.length) {
+                finalTextsForCards.push(textItemsArray[i]);
+            } else {
+                finalTextsForCards.push(`[Placeholder - Card ${i + 1} - Not enough text items generated]`);
+            }
+        }
+
+
+        // --- 4. Create and Save Multiple Card Documents ---
+        const generatedCardsArray = [];
+        for (let i = 0; i < numCardsInDeck; i++) {
+            const individualCardText = finalTextsForCards[i];
+
+            const elements = [];
+            elements.push({
+                elementId: uuidv4(), type: 'image', imageUrl: finalBaseImageUrl, // Same image for all
+                x: 0, y: 0, width: cardWidthPx, height: cardHeightPx, zIndex: 0, rotation: 0
+            });
+
+            const textPaddingHorizontal = Math.round(cardWidthPx * 0.1);
+            let textBlockHeight = !aiImageGeneratedSuccessfully ? Math.round(cardHeightPx * 0.80) : Math.round(cardHeightPx * 0.45);
+            textBlockHeight = Math.max(30, textBlockHeight);
+            const textBlockWidth = cardWidthPx - (2 * textPaddingHorizontal);
+            const textBlockX = textPaddingHorizontal;
+            const textBlockY = Math.round((cardHeightPx - textBlockHeight) / 2);
+
+            elements.push({
+                elementId: uuidv4(), type: 'text', content: individualCardText,
+                x: textBlockX, y: textBlockY, width: textBlockWidth, height: textBlockHeight,
+                fontSize: "22px", fontFamily: "Arial", color: defaultTextColor,
+                textAlign: "center", zIndex: 1, rotation: 0
+            });
+
+            const newCard = new Card({
+                name: `${cardName} - ${i + 1}/${numCardsInDeck}`, // e.g., "Math Deck - 1/5"
+                promptUsed: userPrompt,
+                originalDeckRequest: { baseName: cardName, indexInDeck: i + 1, totalInDeck: numCardsInDeck },
+                widthPx: cardWidthPx, heightPx: cardHeightPx, elements: elements,
+                metadata: {
+                    imageGenAspectRatio: aspectRatioForAI,
+                    outputFormat: (finalBaseImageUrl && finalBaseImageUrl.startsWith('data:image/'))
+                                    ? (finalBaseImageUrl.match(/^data:image\/([a-z]+);/i)?.[1] || imageOutputFormat)
+                                    : "url_placeholder",
+                    backgroundColor: '#FFFFFF',
+                    imageGenerationStatus: aiImageGeneratedSuccessfully ? "AI Success" : `AI Failed: ${imageGenerationError || 'Unknown'}`,
+                    textGenerationStatus: textListGeneratedSuccessfully ? "Success" : `List Gen Failed: ${textGenerationError || 'Unknown'}`
+                }
+            });
+            await newCard.save(); // In a production app, you might Promise.all(savePromises)
+            generatedCardsArray.push(newCard);
+        }
+
+        res.status(201).json({
+            message: `Deck of ${generatedCardsArray.length} cards generated. AI Image: ${aiImageGeneratedSuccessfully ? 'OK' : 'Failed/Placeholder'}. Text List: ${textListGeneratedSuccessfully ? 'OK' : 'Generated/Placeholders'}.`,
+            cards: generatedCardsArray, // Returns an array of card objects
+            imageWasAIgenerated: aiImageGeneratedSuccessfully,
+            textListWasGenerated: textListGeneratedSuccessfully 
+        });
+
+    } catch (error) {
+        console.error("Error in generateFullCardFromPrompt Controller:", error.message, error.stack);
+        res.status(500).json({ message: "Error generating full card deck.", error: error.message });
     }
 };
