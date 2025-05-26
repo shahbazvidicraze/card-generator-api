@@ -145,23 +145,7 @@
             <div class="col-lg-7 col-md-12">
                 <div class="display-section">
                     <h5 class="text-center">Generated Card Version</h5>
-                    <div id="cardPreviewContainer" class="card-preview-container">
-                        <div class="col-lg-7 col-md-12">
-                            <div class="display-section">
-                                <h5 class="text-center">Generated Card Version</h5>
-                                <div id="cardPreviewContainer" class="card-preview-container">
-                                    <!-- Main card elements will be injected here -->
-                                </div>
-                                <p class="text-center small-label mt-2">This is a dynamic preview.</p>
-
-                                <!-- New Container for Deck Thumbnails -->
-                                <div id="deckThumbnailsContainer" class="mt-4" style="display: none; text-align: center;">
-                                    <h6 class="text-center">Deck Previews</h6>
-                                    <!-- Thumbnail card divs will be injected here -->
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                    <div id="cardPreviewContainer" class="card-preview-container"></div>
                     <p class="text-center small-label mt-2">This is a dynamic preview.</p>
                 </div>
             </div>
@@ -362,13 +346,12 @@
             });
 
             function renderCard(cardData, targetCardWidth, targetCardHeight) {
-                $container.empty(); // Clear previous elements
+                const $previewContainer = $('#cardPreviewContainer');
+                $previewContainer.empty();
 
                 let displayWidth = targetCardWidth;
                 let displayHeight = targetCardHeight;
-                // Determine max width for scaling based on if it's the main preview or a thumbnail
-                const isMainPreview = $container.attr('id') === 'cardPreviewContainer';
-                const maxWidth = isMainPreview ? Math.min(450, $('.display-section').width() ? $('.display-section').width() - 40 : 450) : 100; // Smaller for thumbnails
+                const maxWidth = Math.min(450, $('.display-section').width() ? $('.display-section').width() - 40 : 450) ;
 
                 if (displayWidth > maxWidth && maxWidth > 0) {
                     const ratio = maxWidth / displayWidth;
@@ -376,17 +359,10 @@
                     displayHeight = Math.round(displayHeight * ratio);
                 }
                 
-                $container.css({ // Apply to the passed container
+                $previewContainer.css({
                     width: displayWidth + 'px',
                     height: displayHeight + 'px',
-                    backgroundColor: cardData.metadata?.backgroundColor || '#FFFFFF',
-                    // Add some styles if it's a thumbnail
-                    border: isMainPreview ? '1px solid #5a5a76' : '1px solid #777',
-                    margin: isMainPreview ? '20px auto' : '5px',
-                    float: isMainPreview ? 'none' : 'left', // For thumbnails to line up
-                    position: 'relative', // Ensure this is set for absolute positioning of elements
-                    overflow: 'hidden',
-                    boxShadow: isMainPreview ? '0 4px 8px rgba(0,0,0,0.3)' : '0 2px 4px rgba(0,0,0,0.2)'
+                    backgroundColor: cardData.metadata?.backgroundColor || '#FFFFFF'
                 });
 
                 if (cardData.elements && Array.isArray(cardData.elements)) {
@@ -430,228 +406,7 @@
                         $previewContainer.append($el);
                     });
                 }
-
-                 function renderThumbnail(cardData, originalCardWidth, originalCardHeight, index, $deckContainer) {
-                    const $thumbDiv = $('<div></div>')
-                        .addClass('card-preview-thumbnail') // Add a class for specific thumbnail styling if needed
-                        .attr('id', 'thumb-' + index)
-                        .css({ display: 'inline-block' }); // To keep them in a row
-                    $deckContainer.append($thumbDiv);
-                    renderCard(cardData, originalCardWidth, originalCardHeight, $thumbDiv); // Reuse renderCard for thumbnail
-                }
-                
-                // Helper to copy element rendering logic from renderCard
-                // This part is duplicated from renderCard, ideally refactor into a shared function
-                function renderElementsToContainer($elContainer, elements, displayWidth, targetCardWidth, targetCardHeight) {
-                    elements.forEach(element => {
-                        const $el = $('<div></div>').addClass('card-element').addClass(element.type);
-                        const scaleX = displayWidth / targetCardWidth;
-                        const scaleY = (targetCardHeight === 0 ? 0 : displayWidth / targetCardWidth) * targetCardHeight / targetCardHeight || scaleX; // maintain aspect ratio of scaling for font if height is flexible
-                        // More robust scaling considering targetCardHeight might be different for thumbnails if aspect ratio is preserved
-                        // const scale = displayWidth / targetCardWidth; // Simple scale based on width
-
-                        $el.css({
-                            left: (element.x || 0) * scaleX + 'px',
-                            top: (element.y || 0) * scaleY + 'px',
-                            width: (element.width || 100) * scaleX + 'px',
-                            height: (element.height || 50) * scaleY + 'px',
-                            zIndex: element.zIndex || 0,
-                            transform: `rotate(${element.rotation || 0}deg)`
-                        });
-
-                        if (element.type === 'image' && element.imageUrl) {
-                            $el.css('background-image', `url(${element.imageUrl})`);
-                        } else if (element.type === 'text') {
-                            let textContent = element.content || '';
-                            textContent = textContent.replace(/\r\n/g, '<br>').replace(/\n/g, '<br>');
-                            $el.html(textContent);
-                            const originalFontSize = parseFloat(element.fontSize || '22px');
-                            const scaledFontSize = Math.max(isThumbnail ? 6 : 8, originalFontSize * Math.min(scaleX, scaleY)); // Smaller min font for thumbs
-                            $el.css({
-                                fontSize: scaledFontSize + 'px',
-                                fontFamily: element.fontFamily || 'Arial',
-                                color: element.color || '#333333',
-                                textAlign: element.textAlign || 'center',
-                                fontWeight: element.fontWeight || 'normal',
-                                fontStyle: element.fontStyle || 'normal',
-                            });
-                        }
-                        $elContainer.append($el);
-                    });
-                }
             }
-
-             function renderCard(cardData, targetCardWidth, targetCardHeight, $container, isThumbnail = false) {
-                $container.empty();
-
-                let displayWidth = targetCardWidth;
-                let displayHeight = targetCardHeight;
-                // const maxPreviewWidth = isThumbnail ? 100 : (Math.min(450, $('.display-section').width() ? $('.display-section').width() - 40 : 450));
-                // More robustly get parent width for main preview
-                let parentWidth = $('.display-section').width();
-                if (!parentWidth || parentWidth <=0) parentWidth = 450; // Fallback if parent not ready
-                const maxPreviewWidth = isThumbnail ? 100 : (Math.min(450, parentWidth - 40));
-
-
-                if (targetCardWidth > maxPreviewWidth && maxPreviewWidth > 0) {
-                    const scale = maxPreviewWidth / targetCardWidth;
-                    displayWidth = maxPreviewWidth;
-                    displayHeight = Math.round(targetCardHeight * scale);
-                } else { 
-                    displayWidth = targetCardWidth;
-                    displayHeight = targetCardHeight;
-                }
-                
-                $container.css({
-                    width: displayWidth + 'px',
-                    height: displayHeight + 'px',
-                    backgroundColor: cardData.metadata?.backgroundColor || '#FFFFFF',
-                    border: isThumbnail ? '1px solid #777' : '1px solid #5a5a76',
-                    margin: isThumbnail ? '5px' : '20px auto',
-                    float: isThumbnail ? 'left' : 'none', // Important for thumbnail layout
-                    clear: isThumbnail && ($container.prev().length > 0 && $container.prev().position().top !== $container.position().top) ? 'left' : 'none', // Attempt to clear float for new row
-                    position: 'relative',
-                    overflow: 'hidden',
-                    boxShadow: isThumbnail ? '0 2px 4px rgba(0,0,0,0.2)' : '0 4px 8px rgba(0,0,0,0.3)',
-                    cursor: isThumbnail ? 'pointer' : 'default'
-                });
-
-                if (isThumbnail) {
-                    $container.off('click').on('click', function() { 
-                        let mainCardData = JSON.parse(JSON.stringify(cardData)); 
-                         if (!dataCache.imageWasAIgenerated && $('#useSelectedThemeOnAIFail').is(':checked') && dataCache.selectedThemeImageSrcForFallback) {
-                             let imageElement = mainCardData.elements.find(el => el.type === 'image' && el.zIndex === 0);
-                             if(imageElement) {
-                                 imageElement.imageUrl = dataCache.selectedThemeImageSrcForFallback;
-                             } else {
-                                 if(!mainCardData.elements) mainCardData.elements = [];
-                                 mainCardData.elements.unshift({
-                                    elementId: 'frontend-fallback-main-' + Date.now(), type: 'image', imageUrl: dataCache.selectedThemeImageSrcForFallback,
-                                    x: 0, y: 0, width: mainCardData.widthPx, height: mainCardData.heightPx, zIndex: 0, rotation: 0
-                                 });
-                                 mainCardData.elements.sort((a,b) => (a.zIndex||0) - (b.zIndex||0));
-                             }
-                         } else if (!dataCache.imageWasAIgenerated && mainCardData.elements) {
-                            // If AI image failed and checkbox not checked, ensure the backend's placeholder is used (it should be already)
-                            // This branch might not be strictly necessary if backend always provides a placeholder element
-                            let imageElement = mainCardData.elements.find(el => el.type === 'image' && el.zIndex === 0);
-                            if(imageElement && imageElement.imageUrl !== dataCache.selectedThemeImageSrcForFallback) { // To avoid overwriting if it was already a theme fallback
-                                // Ensure it's using the original placeholder from backend if one was provided
-                                const originalBackendCard = data.cards.find(c => c._id === cardData._id); // This assumes 'data' is accessible or stored
-                                if (originalBackendCard && originalBackendCard.elements) {
-                                    const originalImageElement = originalBackendCard.elements.find(el => el.type === 'image' && el.zIndex === 0);
-                                    if (originalImageElement) imageElement.imageUrl = originalImageElement.imageUrl;
-                                }
-                            }
-                         }
-                        renderCard(mainCardData, dataCache.originalCardWidth, dataCache.originalCardHeight, $('#cardPreviewContainer'), false); 
-                    });
-                }
-
-
-                if (cardData.elements && Array.isArray(cardData.elements)) {
-                    const sortedElements = [...cardData.elements].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
-                    renderElementsToContainer(sortedElements, $container, displayWidth, displayHeight, targetCardWidth, targetCardHeight, isThumbnail);
-                }
-            }
-
-            function renderThumbnail(cardData, originalCardWidth, originalCardHeight, index, $deckContainer) {
-                const $thumbDiv = $('<div></div>')
-                    .addClass('card-preview-thumbnail')
-                    .attr('id', 'thumb-' + (cardData._id || index)) // Use card _id if available for more stable IDs
-                    .css({ display: 'inline-block' }); // Changed from float to inline-block for wrapping
-                $deckContainer.append($thumbDiv);
-                renderCard(cardData, originalCardWidth, originalCardHeight, $thumbDiv, true);
-            }
-
-            function renderElementsToContainer(elements, $container, displayWidth, displayHeight, cardActualWidth, cardActualHeight, isThumbnailFlag) {
-                elements.forEach(element => {
-                    const $el = $('<div></div>').addClass('card-element').addClass(element.type);
-                    
-                    const scaleX = displayWidth / cardActualWidth;
-                    const scaleY = displayHeight / cardActualHeight;
-
-                    $el.css({
-                        left: (element.x || 0) * scaleX + 'px',
-                        top: (element.y || 0) * scaleY + 'px',
-                        width: (element.width || 100) * scaleX + 'px',
-                        height: (element.height || 50) * scaleY + 'px',
-                        zIndex: element.zIndex || 0,
-                        transform: `rotate(${element.rotation || 0}deg)`
-                    });
-
-                    if (element.type === 'image' && element.imageUrl) {
-                        $el.css('background-image', `url(${element.imageUrl})`);
-                    } else if (element.type === 'text') {
-                        let textContent = element.content || '';
-                        textContent = textContent.replace(/\r\n/g, '<br>').replace(/\n/g, '<br>');
-                        $el.html(textContent);
-                        
-                        const originalFontSize = parseFloat(element.fontSize || '22px');
-                        const fontScale = Math.min(scaleX, scaleY); 
-                        const scaledFontSize = Math.max(isThumbnailFlag ? 8 : 12, originalFontSize * fontScale); // Adjusted min font sizes
-
-                        $el.css({
-                            fontSize: scaledFontSize + 'px',
-                            fontFamily: element.fontFamily || 'Arial',
-                            color: element.color || '#333333',
-                            textAlign: element.textAlign || 'center',
-                            fontWeight: element.fontWeight || 'normal',
-                            fontStyle: element.fontStyle || 'normal',
-                        });
-                    }
-                    $container.append($el);
-                });
-            }
-            // Shared element rendering logic
-            function renderElementsToContainer(elements, $container, displayWidth, displayHeight, cardActualWidth, cardActualHeight, isThumbnailFlag) {
-                elements.forEach(element => {
-                    const $el = $('<div></div>').addClass('card-element').addClass(element.type);
-                    
-                    // Calculate scale based on the container's display size vs the card's actual intended size
-                    const scaleX = displayWidth / cardActualWidth;
-                    const scaleY = displayHeight / cardActualHeight;
-
-                    $el.css({
-                        left: (element.x || 0) * scaleX + 'px',
-                        top: (element.y || 0) * scaleY + 'px',
-                        width: (element.width || 100) * scaleX + 'px',
-                        height: (element.height || 50) * scaleY + 'px',
-                        zIndex: element.zIndex || 0,
-                        transform: `rotate(${element.rotation || 0}deg)`
-                    });
-
-                    if (element.type === 'image' && element.imageUrl) {
-                        $el.css('background-image', `url(${element.imageUrl})`);
-                    } else if (element.type === 'text') {
-                        let textContent = element.content || '';
-                        textContent = textContent.replace(/\r\n/g, '<br>').replace(/\n/g, '<br>');
-                        $el.html(textContent);
-                        
-                        const originalFontSize = parseFloat(element.fontSize || '22px');
-                        // Use the smaller of scaleX or scaleY for font scaling to prevent distortion, or just scale with width
-                        const fontScale = Math.min(scaleX, scaleY); // Or just scaleX if width is primary driver
-                        const scaledFontSize = Math.max(isThumbnailFlag ? 6 : 10, originalFontSize * fontScale); // Min font size larger for main card
-
-                        $el.css({
-                            fontSize: scaledFontSize + 'px',
-                            fontFamily: element.fontFamily || 'Arial',
-                            color: element.color || '#333333',
-                            textAlign: element.textAlign || 'center',
-                            fontWeight: element.fontWeight || 'normal',
-                            fontStyle: element.fontStyle || 'normal',
-                        });
-                    }
-                    $container.append($el);
-                });
-            }
-            let dataCache = {}; // To store some response data for thumbnail clicks
-             $('#cardGenerationForm').on('submit', async function(e) {
-                 // ...
-                 dataCache.imageWasAIgenerated = data.imageWasAIgenerated; // Store this from backend response
-                 dataCache.selectedThemeImageSrcForFallback = selectedThemeImageActualSrc; // Store this from form
-                 // ...
-             });
         });
     </script>
 </body>
