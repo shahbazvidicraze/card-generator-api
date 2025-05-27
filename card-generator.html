@@ -156,7 +156,8 @@
                         <div class="form-group">
                             <label>Accent Color (for text & AI image)</label>
                             <div class="card-color-theme">
-                                <span class="color-dot" style="background-color: #FF6347;" data-color-prompt="tomato red accent" data-color-value="#333333"></span>
+                                <span class="color-dot" style="background-color: #000000;" data-color-prompt="tomato red accent" data-color-value="#000000"></span>
+                                <span class="color-dot" style="background-color: #ff3a17;" data-color-prompt="tomato red accent" data-color-value="#ff3a17"></span>
                                 <span class="color-dot selected" style="background-color: #4682B4;" data-color-prompt="steel blue accent" data-color-value="#4682B4"></span>
                                 <span class="color-dot" style="background-color: #FFD700;" data-color-prompt="gold accent" data-color-value="#FFD700"></span>
                                 <span class="color-dot" style="background-color: #90EE90;" data-color-prompt="light green accent" data-color-value="#90EE90"></span>
@@ -196,8 +197,7 @@
             { name: "Bubble Border", prompt: "educational bubble border", src: "https://image.slidesdocs.com/responsive-images/docs/stationery-for-education-in-a-bubble-page-border-background-word-template_3737a7d4a6__1131_1600.jpg" },
             { name: "Green Math", prompt: "green math theme", src: "https://image.slidesdocs.com/responsive-images/docs/simplifying-math-with-a-touch-of-green-page-border-background-word-template_3241e560c8__1131_1600.jpg" },
             { name: "Pencil Art", prompt: "pencil and paper art", src: "https://clipart-library.com/images/pi7r57ndT.jpg" },
-            { name: "Fantasy Landscape", prompt: "fantasy landscape", src: "https://i.pinimg.com/736x/bb/94/11/bb94116a9f46a6e4a54533f082bf4cfb.jpg" },
-            { name: "Chalkboard", prompt: "school chalkboard background", src: "https://wallpapers.com/images/hd/school-picture-background-3w7ny3s5pak6kw2l.jpg" }
+            { name: "Fantasy Landscape", prompt: "fantasy landscape", src: "https://i.pinimg.com/736x/bb/94/11/bb94116a9f46a6e4a54533f082bf4cfb.jpg" }
         ];
        let uploadedImageBase64 = null;
         let currentSelectedThemeSrc = null; 
@@ -210,52 +210,80 @@
 
         $(document).ready(function() {
             const $themeSelectorContainer = $('#themeSelectorContainer');
-            // Populate predefined themes (Upload button is already in HTML)
+            const $uploadThemeBtn = $('#uploadThemeBtn'); // Cache the upload button
+
+            // Populate predefined themes
             PREDEFINED_THEMES.forEach((theme, index) => {
                 const $img = $('<img>')
                     .attr('src', theme.src)
                     .attr('alt', theme.name)
-                    .data('theme-prompt', theme.prompt + " style") // For AI image gen
-                    .data('theme-src', theme.src)        // Actual src for fallback
+                    .data('theme-prompt', theme.prompt + " style")
+                    .data('theme-src', theme.src)
                     .data('is-predefined', true);
-                if (index === 0) { // Select the first predefined theme by default
+                if (index === 0 && !uploadedImageBase64) { // Select first predefined if no uploaded one is active
                     $img.addClass('selected');
                     currentSelectedThemeSrc = theme.src;
                 }
-                // Prepend to keep upload button visually last if it was hardcoded, or append before it
-                $('#uploadThemeBtn').before($img);
+                $uploadThemeBtn.before($img); // Insert before the upload button
             });
 
+            // Handle theme selection (predefined, uploaded preview, or upload button itself)
             $themeSelectorContainer.on('click', 'img, .upload-theme-option', function() {
+                const $clickedElement = $(this);
                 $themeSelectorContainer.find('img, .upload-theme-option').removeClass('selected');
-                $(this).addClass('selected');
+                $clickedElement.addClass('selected');
 
-                if ($(this).is('img') && $(this).data('is-predefined')) {
-                    currentSelectedThemeSrc = $(this).data('theme-src');
-                    uploadedImageBase64 = null;
-                    $('#uploadThemeBtn').html('+<span>Upload</span>').removeClass('selected-uploaded'); // Reset upload button
-                } else if ($(this).is('.upload-theme-option')) {
-                    if (uploadedImageBase64) { // If re-clicking upload btn after an upload
+                if ($clickedElement.data('is-predefined')) { // Clicked a predefined theme image
+                    currentSelectedThemeSrc = $clickedElement.data('theme-src');
+                    // If there was an uploaded image preview, it's now deselected.
+                    // The #uploadThemeBtn's content (if it was showing a preview) doesn't need to change yet,
+                    // unless you want to revert it back to "+" when a predefined is clicked.
+                    // For simplicity, let's allow the upload button to keep its preview even if deselected.
+                } else if ($clickedElement.data('is-uploaded-preview')) { // Clicked the uploaded image preview
+                    currentSelectedThemeSrc = $clickedElement.data('theme-src'); // which is uploadedImageBase64
+                } else if ($clickedElement.is('#uploadThemeBtn')) { // Clicked the actual upload button
+                    if (uploadedImageBase64 && $clickedElement.find('img').length > 0) {
+                        // If it's already showing an uploaded image preview and was clicked again
                         currentSelectedThemeSrc = uploadedImageBase64;
-                    } else { // Clicking upload btn to trigger file input
-                         $('#customImageUpload').val(null).click(); // Reset and click
+                    } else {
+                        // Trigger file input
+                        $('#customImageUpload').val(null).click();
+                        // Don't set currentSelectedThemeSrc yet, wait for file upload
                     }
                 }
             });
             
-            $('#customImageUpload').on('change', function(event) {
+             $('#customImageUpload').on('change', function(event) {
                 const file = event.target.files[0];
                 if (file) {
                     const reader = new FileReader();
                     reader.onload = function(e) {
                         uploadedImageBase64 = e.target.result;
-                        currentSelectedThemeSrc = uploadedImageBase64;
-                        $('#uploadThemeBtn').html(`<img src="${uploadedImageBase64}" style="width:100%; height:100%; object-fit:cover;" alt="Uploaded">`).addClass('selected-uploaded');
-                        $themeSelectorContainer.find('img').removeClass('selected'); // Deselect predefined
-                        $('#uploadThemeBtn').addClass('selected');
+                        currentSelectedThemeSrc = uploadedImageBase64; // Update global tracker
+
+                        // Remove any existing uploaded theme preview image
+                        $themeSelectorContainer.find('.uploaded-theme-preview').remove();
+
+                        // Create new image element for the uploaded theme
+                        const $uploadedImgPreview = $('<img>')
+                            .attr('src', uploadedImageBase64)
+                            .attr('alt', 'Uploaded Theme')
+                            .addClass('uploaded-theme-preview') // Specific class for easy removal/identification
+                            .data('theme-src', uploadedImageBase64) // Store its own src
+                            .data('is-uploaded-preview', true) // Mark it as such
+                            .data('theme-prompt', "custom uploaded image"); // Generic prompt for AI if needed
+
+                        // Deselect all themes and select the new one
+                        $themeSelectorContainer.find('img, .upload-theme-option').removeClass('selected');
+                        $uploadedImgPreview.addClass('selected');
+                        
+                        // Insert the new uploaded theme preview before the upload button
+                        $uploadThemeBtn.before($uploadedImgPreview);
+
                     }
                     reader.readAsDataURL(file);
                 }
+                $(this).val('');
             });
 
             $('.card-color-theme .color-dot').on('click', function() {
