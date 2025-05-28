@@ -32,10 +32,10 @@ const CardSchema = new mongoose.Schema({
     // cardArtUrl: { type: String }, // This can be deprecated if the main image is always an element
     widthPx: { type: Number, default: 512 },
     heightPx: { type: Number, default: 512 },
-    elements: [ElementSchema], // Array of editable elements for the card FRONT
 
-    cardBackImageUrl: { type: String, default: null }, // NEW FIELD FOR CARD BACK IMAGE URL/DATA URI
-
+    cardFrontElements: [ElementSchema], // Renamed from 'elements'
+    cardBackElements: [ElementSchema],  // NEW: Array for back elements
+    
     originalDeckRequest: { // Optional, if generating decks
         baseName: String,
         indexInDeck: Number,

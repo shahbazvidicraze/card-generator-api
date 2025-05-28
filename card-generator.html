@@ -143,6 +143,9 @@
             transform: rotateY(180deg);
         }
 
+        #cardPreviewContainer.flipped #cardBack{
+            z-index: 10;
+        }
         .card-face {
             /* Common for front and back */
             position: absolute;
@@ -498,7 +501,7 @@
         };
         const DEFAULT_FRONTEND_PLACEHOLDER_URL = "https://via.placeholder.com/150x200.png?text=No+Theme";
         
-        const DEFAULT_CARD_BACK_PLACEHOLDER_TEXT = "Card Back";
+        const DEFAULT_CARD_BACK_PLACEHOLDER_TEXT = "";
         let uploadedCardBackImageBase64 = null; // For a custom uploaded back image
         let isCardFlipped = false; // Tracks the state of the main card preview;
 
@@ -816,8 +819,9 @@
                         
                         const processedCardsToRender = dataCache.fullDeckData.map((originalCardData) => {
                             let cardToDisplay = JSON.parse(JSON.stringify(originalCardData));
-                            let finalImgUrlForFront;
+                            let finalImgUrlForFront; // <<<< DECLARED HERE
                             const aiActuallySucceeded = dataCache.imageWasAIgenerated;
+                            const imageUsagePref = $('#imageUsagePreference').val(); // Ensure this is fetched fresh or correctly scoped
 
                             if (imageUsagePref === 'selected_theme_only') {
                                 finalImgUrlForFront = dataCache.themeSrcSelectedAtGeneration || DEFAULT_FRONTEND_PLACEHOLDER_URL;
@@ -825,22 +829,40 @@
                                 finalImgUrlForFront = aiActuallySucceeded ? 
                                     cardToDisplay.elements?.find(el=>el.type==='image' && el.zIndex===0)?.imageUrl : 
                                     (dataCache.themeSrcSelectedAtGeneration || DEFAULT_FRONTEND_PLACEHOLDER_URL);
-                            } else { // ai_only_white_fallback
+                            } else { // 'ai_only_white_fallback'
                                 finalImgUrlForFront = cardToDisplay.elements?.find(el=>el.type==='image' && el.zIndex===0)?.imageUrl;
-                                if (!finalImgUrlForFront) finalImgUrlForFront = DEFAULT_FRONTEND_PLACEHOLDER_URL; // Ensure it's not empty
+                                // If backend's placeholder was empty and AI failed, use a frontend default
+                                if (!finalImgUrlForFront && !aiActuallySucceeded) {
+                                    finalImgUrlForFront = DEFAULT_FRONTEND_PLACEHOLDER_URL;
+                                }
+                            }
+
+                            // Ultimate safety net: if finalImgUrlForFront is still null/undefined/empty, use placeholder
+                            if (!finalImgUrlForFront) {
+                                finalImgUrlForFront = DEFAULT_FRONTEND_PLACEHOLDER_URL;
                             }
 
                             if (!cardToDisplay.elements) cardToDisplay.elements = [];
-                            let imgElement = cardToDisplay.elements.find(el => el.type === 'image' && el.zIndex === 0);
-                            if (imgElement) {
-                                imgElement.imageUrl = finalImgUrlForFront;
+                            let frontImageElement = cardToDisplay.elements.find(el => el.type === 'image' && el.zIndex === 0);
+                            
+                            if (frontImageElement) {
+                                frontImageElement.imageUrl = finalImgUrlForFront; // Use correct variable
                             } else {
+                                // If no image element exists (e.g., backend sent empty elements array for front)
+                                // create one.
                                 cardToDisplay.elements.unshift({
-                                    elementId: 'img-elem-fallback-' + Date.now(), type: 'image', imageUrl: finalImgUrlForCard,
-                                    x: 0, y: 0, width: cardToDisplay.widthPx, height: cardToDisplay.heightPx, zIndex: 0, rotation: 0
+                                    elementId: 'frontend-img-elem-' + Date.now(), // Unique ID
+                                    type: 'image', 
+                                    imageUrl: finalImgUrlForFront, // Use correct variable
+                                    x: 0, y: 0, 
+                                    width: cardToDisplay.widthPx, 
+                                    height: cardToDisplay.heightPx, 
+                                    zIndex: 0, 
+                                    rotation: 0
                                 });
-                                cardToDisplay.elements.sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
+                                cardToDisplay.elements.sort((a,b) => (a.zIndex||0)-(b.zIndex||0)); // Re-sort if added at beginning
                             }
+                            // console.log("Processed card for rendering:", cardToDisplay);
                             return cardToDisplay;
                         });
 
@@ -898,24 +920,24 @@
             }
 
             // New function to display a card in the main preview area
-            function displayMainCard(cardData, fullDeckForContext) {
-                console.log("DISPLAY_MAIN_CARD: Rendering card:", cardData.name, "CardBack URL from data:", cardData.cardBackImageUrl ? cardData.cardBackImageUrl.substring(0,60) : "None");
-                
-                // Store the currently displayed card's data on the preview container for reference
+            function displayMainCard(cardData) { // Removed fullDeckContext if not directly used by this function
+                console.log("DISPLAY_MAIN_CARD: Rendering card:", cardData.name);
+                // console.log("Card data for main display:", JSON.stringify(cardData, null, 2).substring(0, 500));
                 $('#cardPreviewContainer').data('currentCardData', cardData);
 
-                // Render the FRONT face using the card's elements (which have already been processed for front image)
-                renderCardFace(cardData, dataCache.originalCardWidth, dataCache.originalCardHeight, $('#cardFront'), false, fullDeckForContext);
+                // Render the FRONT face using the card's elements
+                renderCardFace(cardData, dataCache.originalCardWidth, dataCache.originalCardHeight, $('#cardFront'), false);
                 
-                // Update the BACK face using the specific card's cardBackImageUrl
-                updateMainCardBackDisplay(cardData); 
+                // Set the card BACK image using cardBackImageUrl from the cardData object
+                let cardBackDisplayUrl = cardData.cardBackImageUrl || currentSelectedCardBackSrc || DEFAULT_FRONTEND_PLACEHOLDER_URL.replace("Theme","Card Back");
+                $('#cardBack').css('background-image', `url(${cardBackDisplayUrl})`).html(cardBackDisplayUrl && (cardBackDisplayUrl.startsWith('http') || cardBackDisplayUrl.startsWith('data:')) ? '' : `<span>${DEFAULT_CARD_BACK_PLACEHOLDER_TEXT}</span>`);
                 
-                $('#cardPreviewContainer').removeClass('flipped'); // Ensure front is shown
+                $('#cardPreviewContainer').removeClass('flipped');
                 $('#flipCardBtn').text('Flip to Back').show();
             }
 
-                        function renderCardFace(cardData, baseCardWidth, baseCardHeight, $faceContainer, isThumbnailContent = false, fullDeckContext = null) {
-                $faceContainer.empty(); 
+            function renderCardFace(cardData, baseCardWidth, baseCardHeight, $faceContainer, isThumbnailContent = false, fullDeckContext = null, faceType = 'front') {
+                $faceContainer.empty();
 
                 // THIS BLOCK IS WHERE THE ISSUE LIKELY IS FOR THUMBNAILS
                 let displayWidth = isThumbnailContent ? $faceContainer.width() : dataCache.previewContainerDisplayWidth || baseCardWidth;
@@ -974,14 +996,17 @@
                 });
 
 
-                if (cardData.elements && Array.isArray(cardData.elements)) {
-                    const sortedElements = [...cardData.elements].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
-                    // Pass the actual display dimensions of the container for scaling
-                    renderElementsToContainer(sortedElements, $faceContainer, containerActualDisplayWidth, containerActualDisplayHeight, baseCardWidth, baseCardHeight, isThumbnailContent);
+                const elementsToRender = (faceType === 'back' && !isThumbnailContent) ? cardData.cardBackElements : cardData.cardFrontElements;
+
+                if (elementsToRender && Array.isArray(elementsToRender) && elementsToRender.length > 0) {
+                    const sortedElements = [...elementsToRender].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
+                    renderElementsToContainer(sortedElements, $faceContainer, displayWidth, displayHeight, baseCardWidth, baseCardHeight, isThumbnailContent);
                 } else {
-                    // ... no elements message ...
+                    const placeholderText = isThumbnailContent ? 'No Img' : (faceType === 'back' ? 'Card Back Empty' : 'No Front Elements');
+                    $faceContainer.html(`<p style="text-align:center; padding-top:10px; font-size:0.8em; color:#888;">${placeholderText}</p>`);
                 }
             }
+            
 
             function renderThumbnail(cardData, originalCardWidth, originalCardHeight, index, $deckThumbsContainer, fullDeckContext) {
                 const $thumbWrapper = $('<div></div>')
@@ -989,54 +1014,65 @@
                     .data('card-index', index); // Store index to retrieve from fullDeckContext
 
                 // Each thumbnail will have a front face for its content
-                const $thumbFrontFace = $('<div></div>')
-                    .addClass('card-preview-base card-preview-thumbnail-content-front'); // Use card-preview-base for styling
-                
+                const $thumbFrontFace = $('<div></div>').addClass('card-preview-base card-preview-thumbnail-content');
                 $thumbWrapper.append($thumbFrontFace);
                 $deckThumbsContainer.append($thumbWrapper);
 
                 $thumbWrapper.css({ width: '76px', height: '104px' }); // Size of the clickable wrapper
 
-                // Render the card's front elements onto the thumbnail's front face
-                renderCardFace(cardData, originalCardWidth, originalCardHeight, $thumbFrontFace, true, fullDeckContext);
+                // Thumbnails always show the cardFrontElements
+                renderCardFace(cardData, originalCardWidth, originalCardHeight, $thumbFrontFace, true, fullDeckContext, 'front');
 
                 $thumbWrapper.off('click').on('click', function() { 
                     const clickedIndex = $(this).data('card-index');
-                    const cardToDisplayFromDeck = dataCache.fullDeckData[clickedIndex];
-                    if (!cardToDisplayFromDeck) return;
+                    // THE VARIABLE `cardToDisplayFromDeck` IS USED HERE, BUT IT'S THE NAME OF A VARIABLE
+                    // FROM A PREVIOUS VERSION OF THE SUBMIT HANDLER'S MAP FUNCTION.
+                    // WE NEED TO USE `fullDeckContext` WHICH IS PASSED INTO `renderThumbnail`.
+                    const cardDataForMainDisplay = fullDeckContext[clickedIndex]; // <<<< USE fullDeckContext
+                    
+                    if (!cardDataForMainDisplay) { // Check if the card data exists
+                        console.error("Thumbnail click: Card data not found in fullDeckContext for index", clickedIndex);
+                        return;
+                    }
 
-                    let cardToDisplayInMain = JSON.parse(JSON.stringify(cardToDisplayFromDeck));
+                    // Clone the specific card data from the deck for modification
+                    let cardToProcessForMainView = JSON.parse(JSON.stringify(cardDataForMainDisplay));
                     
                     const imageUsagePrefOnClick = $('#imageUsagePreference').val();
-                    const aiSucceededOnClick = dataCache.imageWasAIgenerated;
-                    const themeSrcForFallbackOnClick = dataCache.themeSrcSelectedAtGeneration; 
+                    const aiSucceededOnClick = dataCache.imageWasAIgenerated; // Use cached status from initial generation
+                    const themeSrcForFallbackOnClick = dataCache.themeSrcSelectedAtGeneration; // Use theme selected at initial generation
 
-                    // Determine and apply final image for the main preview's front
                     let finalImageForMainDisplay;
                     if (imageUsagePrefOnClick === 'selected_theme_only') {
                         finalImageForMainDisplay = themeSrcForFallbackOnClick || DEFAULT_FRONTEND_PLACEHOLDER_URL;
                     } else if (imageUsagePrefOnClick === 'ai_then_selected_theme') {
-                        finalImageForMainDisplay = aiSucceededOnClick ?
-                            cardToDisplayInMain.elements.find(el => el.type === 'image' && el.zIndex === 0)?.imageUrl :
+                        finalImageForMainDisplay = aiSucceededOnClick ? 
+                            cardToProcessForMainView.elements.find(el=>el.type==='image' && el.zIndex===0)?.imageUrl : 
                             (themeSrcForFallbackOnClick || DEFAULT_FRONTEND_PLACEHOLDER_URL);
                     } else { // ai_only_white_fallback
-                        finalImageForMainDisplay = cardToDisplayInMain.elements.find(el => el.type === 'image' && el.zIndex === 0)?.imageUrl;
+                         finalImageForMainDisplay = cardToProcessForMainView.elements.find(el=>el.type==='image' && el.zIndex===0)?.imageUrl;
+                         // If backend's placeholder was empty string and AI failed, use a frontend default
+                         if (!finalImageForMainDisplay && !aiSucceededOnClick) {
+                            finalImageForMainDisplay = DEFAULT_FRONTEND_PLACEHOLDER_URL;
+                         }
                     }
-
-                    if (!cardToDisplayInMain.elements) cardToDisplayInMain.elements = [];
-                    let imageElement = cardToDisplayInMain.elements.find(el => el.type === 'image' && el.zIndex === 0);
-                    if (imageElement) {
+                    // Ultimate safety net
+                    if (!finalImageForMainDisplay) finalImageForMainDisplay = DEFAULT_FRONTEND_PLACEHOLDER_URL;
+                    
+                    if (!cardToProcessForMainView.elements) cardToProcessForMainView.elements = [];
+                    let imageElement = cardToProcessForMainView.elements.find(el => el.type === 'image' && el.zIndex === 0);
+                    if(imageElement) {
                         imageElement.imageUrl = finalImageForMainDisplay;
-                    } else {
-                        cardToDisplayInMain.elements.unshift({
+                    } else { 
+                        cardToProcessForMainView.elements.unshift({
                             elementId: 'mainfb-' + Date.now(), type: 'image', imageUrl: finalImageForMainDisplay,
-                            x: 0, y: 0, width: cardToDisplayInMain.widthPx, height: cardToDisplayInMain.heightPx,
-                            zIndex: 0, rotation: 0
+                            x:0, y:0, width: cardToProcessForMainView.widthPx, height: cardToProcessForMainView.heightPx,
+                            zIndex:0, rotation:0
                         });
-                        cardToDisplayInMain.elements.sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
+                        cardToProcessForMainView.elements.sort((a,b)=>(a.zIndex||0)-(b.zIndex||0));
                     }
 
-                     renderCardFace(cardToDisplayInMain, dataCache.originalCardWidth, dataCache.originalCardHeight, $('#cardFront'), false, fullDeckContext);
+                     renderCardFace(cardToProcessForMainView, dataCache.originalCardWidth, dataCache.originalCardHeight, $('#cardFront'), false, fullDeckContext);
                     // Update card back for the main preview
                     if (uploadedCardBackBase64) {
                         $('#cardBack').css('background-image', `url(${uploadedCardBackBase64})`).html('');
@@ -1045,9 +1081,10 @@
                     }
                     $('#cardPreviewContainer').removeClass('flipped'); // Show front
 
+                    displayMainCard(cardToProcessForMainView, fullDeckContext); // Pass fullDeckContext again if displayMainCard uses it
+                    
                     $('#deckThumbnailsContainer .card-preview-thumbnail-wrapper').removeClass('selected-thumb');
                     $(this).addClass('selected-thumb');
-                    displayMainCard(cardData, fullDeckContext);
                 });
             }
 

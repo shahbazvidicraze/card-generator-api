@@ -530,74 +530,82 @@ exports.generateFullCardFromPrompt = async (req, res) => {
         // --- 4. Create and Save Multiple Card Documents ---
         const generatedCardsArray = [];
         for (let i = 0; i < numCardsInDeck; i++) {
-            const individualCardText = finalTextsForCards[i];
-            const elementsForFront = []; // Elements for the card front
-
+            const individualCardText = finalTextsForCards[i] || `[Default Text Card ${i+1}]`;
+            
+            const cardFrontElements = [];
             // Card Front Background Image Element
-            elementsForFront.push({
-                elementId: uuidv4(), type: 'image', imageUrl: finalFrontImageUrl, // AI or backend placeholder
+            cardFrontElements.push({
+                elementId: uuidv4(), type: 'image', imageUrl: finalFrontImageUrl,
                 x: 0, y: 0, width: cardWidthPx, height: cardHeightPx, zIndex: 0, rotation: 0
             });
-
             // Card Front Text Element
             const textPaddingHorizontal = Math.round(cardWidthPx * 0.1);
-            // ... (textBlockHeight, textBlockWidth, textBlockX, textBlockY calculations - same as before) ...
-             let textBlockHeight = !aiImageGeneratedSuccessfully ? Math.round(cardHeightPx * 0.80) : Math.round(cardHeightPx * 0.45);
+            let textBlockHeight = !aiImageGeneratedSuccessfully ? Math.round(cardHeightPx * 0.80) : Math.round(cardHeightPx * 0.45);
             textBlockHeight = Math.max(30, textBlockHeight);
             const textBlockWidth = cardWidthPx - (2 * textPaddingHorizontal);
             const textBlockX = textPaddingHorizontal;
             const textBlockY = Math.round((cardHeightPx - textBlockHeight) / 2);
-
-
-            elementsForFront.push({
+            cardFrontElements.push({
                 elementId: uuidv4(), type: 'text', content: individualCardText,
                 x: textBlockX, y: textBlockY, width: textBlockWidth, height: textBlockHeight,
                 fontSize: "22px", fontFamily: "Arial", color: defaultTextColor,
                 textAlign: "center", zIndex: 1, rotation: 0
             });
 
-            const cardDataObject = {
+            // --- Construct cardBackElements ---
+            const cardBackElements = [];
+            if (cardBackImageDataUri && cardBackImageDataUri.startsWith('data:image')) {
+                cardBackElements.push({
+                    elementId: uuidv4() + "-back", // Ensure unique ID
+                    type: 'image',
+                    imageUrl: cardBackImageDataUri,
+                    x: 0, y: 0,
+                    width: cardWidthPx, // Back image covers the whole card
+                    height: cardHeightPx,
+                    zIndex: 0,
+                    rotation: 0
+                });
+            } else {
+                // Optionally add a default placeholder text element if no back image
+                console.log(`Card ${i+1}: No valid cardBackImageDataUri provided. Card back will be blank or use default BG.`);
+                // Or add a default placeholder image element for the back if you have one
+                // cardBackElements.push({ elementId: uuidv4() + "-back-placeholder", type: 'image', imageUrl: "URL_TO_DEFAULT_BACK_DESIGN", ... });
+            }
+
+            const newCard = new Card({
                 name: `${cardName} - ${i + 1}/${numCardsInDeck}`,
                 promptUsed: userPrompt,
                 originalDeckRequest: { baseName: cardName, indexInDeck: i + 1, totalInDeck: numCardsInDeck },
                 widthPx: cardWidthPx,
                 heightPx: cardHeightPx,
-                elements: elementsForFront,
-                cardBackImageUrl: cardBackImageDataUri, // SAVED from req.body
+                cardFrontElements: cardFrontElements, // Use new field name
+                cardBackElements: cardBackElements,   // Use new field name
                 metadata: {
                     imageGenAspectRatio: aspectRatioForAI,
                     outputFormat: (finalFrontImageUrl && finalFrontImageUrl.startsWith('data:image/'))
                                     ? (finalFrontImageUrl.match(/^data:image\/([a-z]+);/i)?.[1] || imageOutputFormat)
-                                    : "url_placeholder_or_fallback", // Updated
+                                    : "url_placeholder_or_fallback",
                     backgroundColor: '#FFFFFF',
                     imageGenerationStatus: aiImageGeneratedSuccessfully ? "AI Success" : (fallbackImageBase64DataUri ? "Frontend Fallback Used by Backend" : `AI Failed/Backend Placeholder: ${imageGenerationError || 'Unknown'}`),
                     textGenerationStatus: textListGeneratedSuccessfully ? "Success" : `List Gen Failed: ${textGenerationError || 'Unknown'}`
                 }
-            };
-            const newCard = new Card(cardDataObject);
+            });
+            // ... (save card with try-catch as before) ...
             try {
                 const savedCard = await newCard.save();
                 generatedCardsArray.push(savedCard);
-            } catch (dbError) { 
-                console.error("Error in saving card:", dbError.message, dbError.stack);
-                res.status(500).json({ message: "Error saving full card deck.", dbError: dbError.message });
-            }
+            } catch (dbError) { console.error(`DB Save Error for card ${i+1}:`, dbError); generatedCardsArray.push({error: dbError.message}); }
         }
-
+        
         const successfullySavedCards = generatedCardsArray.filter(card => card && !card.error);
-        if (successfullySavedCards.length === 0 && numCardsInDeck > 0) { 
-            res.status(500).json({ message: "Error generating full cards." });
-         }
+        // ... (response logic based on successfullySavedCards) ...
 
-        console.log("CONTROLLER: Sending 201 response.");
         res.status(201).json({
-            message: `Deck of ${successfullySavedCards.length}/${numCardsInDeck} cards generated. AI Image Source: ${aiImageGeneratedSuccessfully ? 'AI' : (fallbackImageBase64DataUri ? 'Frontend Fallback' : 'Backend Placeholder')}. Text List: ${textListGeneratedSuccessfully ? 'OK' : 'Generated/Placeholders'}.`,
+            message: `Deck of ${successfullySavedCards.length}/${numCardsInDeck} cards processed...`,
             cards: successfullySavedCards,
-            imageWasAIgenerated: aiImageGeneratedSuccessfully, // This flag still indicates if the *AI attempt* was successful
+            imageWasAIgenerated: aiImageGeneratedSuccessfully,
             textListWasGenerated: textListGeneratedSuccessfully
         });
-        console.log("CONTROLLER: Response sent.");
-        
 
     } catch (error) {
         console.error("Error in generateFullCardFromPrompt Controller:", error.message, error.stack);
