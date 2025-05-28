@@ -28,17 +28,27 @@ const ElementSchema = new mongoose.Schema({
 
 const CardSchema = new mongoose.Schema({
     name: { type: String, default: 'Untitled Card' },
-    promptUsed: { type: String, required: false }, // No longer strictly required if generating from template or blank
-    cardArtUrl: { type: String }, // Main background art, could also just be the first image element
+    promptUsed: { type: String, required: false },
+    // cardArtUrl: { type: String }, // This can be deprecated if the main image is always an element
     widthPx: { type: Number, default: 512 },
     heightPx: { type: Number, default: 512 },
-    elements: [ElementSchema], // Array of editable elements
-    metadata: {
-        aspectRatio: String,
-        outputFormat: String,
-        backgroundColor: { type: String, default: '#FFFFFF' } // Default card background color if no image
+    elements: [ElementSchema], // Array of editable elements for the card FRONT
+
+    cardBackImageUrl: { type: String, default: null }, // NEW FIELD FOR CARD BACK IMAGE URL/DATA URI
+
+    originalDeckRequest: { // Optional, if generating decks
+        baseName: String,
+        indexInDeck: Number,
+        totalInDeck: Number
     },
-    // userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // For future user association
+    metadata: {
+        imageGenAspectRatio: String,
+        outputFormat: String,
+        backgroundColor: { type: String, default: '#FFFFFF' },
+        selectedThemeColorHex: String, // Text color
+        imageGenerationStatus: String,
+        textGenerationStatus: String
+    },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
 });
