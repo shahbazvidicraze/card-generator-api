@@ -2,8 +2,15 @@
 const express = require('express');
 const router = express.Router();
 
-const cardRoutes = require('./card.routes'); // Import card routes
-router.use('/cards', cardRoutes);          // Use card routes under /api/cards
+const boxRoutes = require('./box.routes');
+const cardRoutes = require('./card.routes');
+// const utilRoutes = require('./util.routes'); // For image proxy, etc.
+// const authRoutes = require('./auth.routes'); // If you have user auth
+
+// router.use('/auth', authRoutes);
+router.use('/boxes', boxRoutes); // All box-related APIs under /api/boxes
+router.use('/cards', cardRoutes); // All card-related APIs under /api/cards
+// router.use('/utils', utilRoutes);
 
 router.get('/health', (req, res) => {
     res.status(200).json({ status: 'UP', message: 'API is healthy' });

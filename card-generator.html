@@ -342,6 +342,10 @@
             <div class="col-lg-5 col-md-12">
                 <div class="form-section">
                     <form id="cardGenerationForm">
+                        <div class="form-group">
+                            <label for="boxName">Deck/Box Name</label>
+                            <input type="text" class="form-control" id="boxName" placeholder="e.g., My Awesome Math Deck" value="My New Card Deck">
+                        </div>
                         <!-- AI Prompt -->
                         <div class="form-group">
                             <label for="aiPrompt">AI Prompt (Describe card content)</label>
@@ -734,7 +738,7 @@
                 const genre = $('#genres').val();
                 const themePromptForAI = $('#themeSelectorContainer .selected').data('theme-prompt') || "";
                 // currentSelectedThemeSrc is already updated globally
-
+                const boxName = $('#boxName').val().trim();
                 const actualTextColor = $('.card-color-theme .color-dot.selected').data('color-value') || "#333333";
 
                 let cardWidth, cardHeight;
@@ -756,141 +760,88 @@
                 if (imageUsagePref !== 'selected_theme_only' && themePromptForAI) {
                     fullUserPrompt += `, ${themePromptForAI}`;
                 }
-                const colorPrompt = $('.card-color-theme .color-dot.selected').data('color-prompt') || "";
-                if (colorPrompt) { fullUserPrompt += `, with ${colorPrompt}`; }
 
                 const numCards = parseInt($('#numCardsInDeck').val()) || 1;
 
-                // --- PREPARE FRONT THEME IMAGE BASE64 FOR PAYLOAD (IF NEEDED BY BACKEND AS FALLBACK) ---
-                let fallbackImageBase64Payload = null;
-                if (currentSelectedThemeSrc) { // This holds either a local URL or an uploaded base64 string
-                    if (currentSelectedThemeSrc.startsWith('data:image')) {
-                        fallbackImageBase64Payload = currentSelectedThemeSrc;
-                    } else { // It's a local asset URL, convert it
-                        console.log("Converting selected FRONT theme URL to base64 for payload:", currentSelectedThemeSrc);
-                        fallbackImageBase64Payload = await imageUrlToBase64(currentSelectedThemeSrc);
-                    }
+                let fullUserPromptForAI = aiPromptText; // Base for AI content generation
+                if (genre && genre.toLowerCase() !== "none" && genre !== "") { fullUserPromptForAI += `, ${genre} genre`; }
+                
+                // Image generation prompt construction is now more nuanced
+                // It combines the main content prompt with the selected front theme's specific prompt
+                let imageGenerationUserPrompt = aiPromptText; // Start with main content
+                if (themePromptForAI) { imageGenerationUserPrompt += `, ${themePromptForAI}`; } // Add theme style
+                const colorPrompt = $('.card-color-theme .color-dot.selected').data('color-prompt') || "";
+                if (colorPrompt) { imageGenerationUserPrompt += `, with ${colorPrompt}`; }
+
+
+                // Prepare FALLBACK FRONT IMAGE (base64) for backend
+                let fallbackFrontImageBase64 = null;
+                if (currentSelectedThemeSrc) {
+                    fallbackFrontImageBase64 = await imageUrlToBase64(currentSelectedThemeSrc);
                 }
 
-                // --- PREPARE CARD BACK BASE64 FOR PAYLOAD ---
-                let cardBackPayloadDataUri = null;
-                if (currentSelectedCardBackSrc) { // currentSelectedCardBackSrc holds URL or base64 from upload
-                    if (currentSelectedCardBackSrc.startsWith('data:image')) {
-                        cardBackPayloadDataUri = currentSelectedCardBackSrc; // Already base64
-                    } else { // It's a URL from predefined back themes, convert it
-                        console.log("Converting selected card back URL to base64 for payload...");
-                        cardBackPayloadDataUri = await imageUrlToBase64(currentSelectedCardBackSrc);
-                        if (!cardBackPayloadDataUri) {
-                            console.warn("Failed to convert card back URL to base64. Sending null to backend.");
-                            // Backend will handle null cardBackImageDataUri (e.g., by storing null)
-                        }
-                    }
+                // Prepare CARD BACK IMAGE (base64) for backend
+                let cardBackImageForPayload = null;
+                if (currentSelectedCardBackSrc) {
+                    cardBackImageForPayload = await imageUrlToBase64(currentSelectedCardBackSrc);
                 }
+                
                 const payload = {
-                    userPrompt: fullUserPrompt,
-                    cardName: "GenDeck-" + aiPromptText.substring(0,10).replace(/\s/g,'_'), 
-                    cardWidthPx: cardWidth, cardHeightPx: cardHeight,
-                    imageOutputFormat: "png", 
+                    boxName: boxName,
+                    userPrompt: imageGenerationUserPrompt, // This is now more styled for the image AI
+                    genre: genre, // Send separately if backend uses it for text AI or metadata
+                    themePromptForAI: themePromptForAI, // Send theme prompt for metadata/AI
+                    accentColorPrompt: colorPrompt, // Send for metadata/AI
+                    accentColorHex: actualTextColor, // For text elements (backend also uses this)
+
+                    defaultCardWidthPx: cardWidth, 
+                    defaultCardHeightPx: cardHeight,
+                    // imageAspectRatioForDeck: ..., // Let backend calculate or add UI for this
+                    imageOutputFormatForDeck: "png", 
                     numCardsInDeck: numCards,
-                    defaultTextColor: actualTextColor,
-                    fallbackImageBase64DataUri: fallbackImageBase64Payload,
-                    cardBackImageDataUri: cardBackPayloadDataUri || null // Send the selected/uploaded card back
+                    
+                    cardBackImageDataUri: cardBackImageForPayload, // Base64 of selected/uploaded back
+                    fallbackFrontImageBase64DataUri: fallbackFrontImageBase64 // Base64 of selected/uploaded front theme
                 };
-                console.log("Sending payload (cardBack included):", payload);
+                console.log("Sending payload to /api/boxes/create-with-deck:", payload);
 
                 try {
-                    const response = await fetch('http://localhost:5001/api/cards/generate-full-card', {
+                    // Endpoint now creates a BOX and a DECK of cards within it
+                    const response = await fetch('http://localhost:5001/api/boxes/create-with-deck', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
                     });
                     const backendResponseData = await response.json();
-                    $generateButton.prop('disabled', false).text('Create Card Design');
-                    $('#loadingIndicator').hide();
+                    // ... (handle loading/button state) ...
 
-                    if (response.ok && backendResponseData.cards && backendResponseData.cards.length > 0) {
-                        console.log("Deck received:", backendResponseData);
-                        // Update dataCache
-                        dataCache.imageWasAIgenerated = backendResponseData.imageWasAIgenerated;
+                    // if (response.ok && backendResponseData.box && backendResponseData.cards && backendResponseData.cards.length > 0) {
+                    if (response.ok) {
+                        console.log("Box and Deck received:", backendResponseData);
+                        dataCache.currentBox = backendResponseData.box;
+                        dataCache.currentDeck = JSON.parse(JSON.stringify(backendResponseData.cards)); // Store pristine deck
+                        dataCache.imageWasAIgeneratedForDeck = backendResponseData.imageWasAIgenerated; // For the deck's front image
                         dataCache.originalCardWidth = cardWidth; 
                         dataCache.originalCardHeight = cardHeight;
-                        dataCache.fullDeckData = JSON.parse(JSON.stringify(backendResponseData.cards)); // Store pristine deck
-                        dataCache.themeSrcSelectedAtGeneration = currentSelectedThemeSrc; // Front theme chosen at generation
+                        // themeSrcSelectedAtGeneration is for the FRONT image fallback scenario handled by backend now
+                        // but we can still store what was selected on frontend for consistency checks if needed
+                        dataCache.themeSrcSelectedAtGeneration = currentSelectedThemeSrc; 
 
-                        const imageUsagePref = $('#imageUsagePreference').val();
-                        
-                        const processedCardsToRender = dataCache.fullDeckData.map((originalCardData) => {
-                            let cardToDisplay = JSON.parse(JSON.stringify(originalCardData));
-                            let finalImgUrlForFront; // <<<< DECLARED HERE
-                            const aiActuallySucceeded = dataCache.imageWasAIgenerated;
-                            const imageUsagePref = $('#imageUsagePreference').val(); // Ensure this is fetched fresh or correctly scoped
 
-                            if (imageUsagePref === 'selected_theme_only') {
-                                finalImgUrlForFront = dataCache.themeSrcSelectedAtGeneration || DEFAULT_FRONTEND_PLACEHOLDER_URL;
-                            } else if (imageUsagePref === 'ai_then_selected_theme') {
-                                finalImgUrlForFront = aiActuallySucceeded ? 
-                                    cardToDisplay.elements?.find(el=>el.type==='image' && el.zIndex===0)?.imageUrl : 
-                                    (dataCache.themeSrcSelectedAtGeneration || DEFAULT_FRONTEND_PLACEHOLDER_URL);
-                            } else { // 'ai_only_white_fallback'
-                                finalImgUrlForFront = cardToDisplay.elements?.find(el=>el.type==='image' && el.zIndex===0)?.imageUrl;
-                                // If backend's placeholder was empty and AI failed, use a frontend default
-                                if (!finalImgUrlForFront && !aiActuallySucceeded) {
-                                    finalImgUrlForFront = DEFAULT_FRONTEND_PLACEHOLDER_URL;
-                                }
-                            }
+                        // The backend now handles which image (AI or fallback) is in card.cardFrontElements[0].imageUrl
+                        // And card.cardBackElements[0].imageUrl (if back was provided)
+                        const cardsToDisplay = dataCache.currentDeck;
 
-                            // Ultimate safety net: if finalImgUrlForFront is still null/undefined/empty, use placeholder
-                            if (!finalImgUrlForFront) {
-                                finalImgUrlForFront = DEFAULT_FRONTEND_PLACEHOLDER_URL;
-                            }
-
-                            if (!cardToDisplay.elements) cardToDisplay.elements = [];
-                            let frontImageElement = cardToDisplay.elements.find(el => el.type === 'image' && el.zIndex === 0);
-                            
-                            if (frontImageElement) {
-                                frontImageElement.imageUrl = finalImgUrlForFront; // Use correct variable
-                            } else {
-                                // If no image element exists (e.g., backend sent empty elements array for front)
-                                // create one.
-                                cardToDisplay.elements.unshift({
-                                    elementId: 'frontend-img-elem-' + Date.now(), // Unique ID
-                                    type: 'image', 
-                                    imageUrl: finalImgUrlForFront, // Use correct variable
-                                    x: 0, y: 0, 
-                                    width: cardToDisplay.widthPx, 
-                                    height: cardToDisplay.heightPx, 
-                                    zIndex: 0, 
-                                    rotation: 0
-                                });
-                                cardToDisplay.elements.sort((a,b) => (a.zIndex||0)-(b.zIndex||0)); // Re-sort if added at beginning
-                            }
-                            // console.log("Processed card for rendering:", cardToDisplay);
-                            return cardToDisplay;
-                        });
-
-                        if (processedCardsToRender.length > 0) {
-                           // Render the first card (which is the front)
-                            renderCardFace(processedCardsToRender[0], dataCache.originalCardWidth, dataCache.originalCardHeight, $('#cardFront'), false, processedCardsToRender);
-                             $('#flipCardBtn').show();
-                            // Set the card back image (if one is uploaded/selected)
-                            if (uploadedCardBackBase64) {
-                                $('#cardBack').css('background-image', `url(${uploadedCardBackBase64})`).html('');
-                            } else {
-                                $('#cardBack').css('background-image', 'none').html('<span>Card Back</span>'); // Default
-                            }
-                            // Ensure card is showing front initially
-                            $('#cardPreviewContainer').removeClass('flipped');
-                            // Select the first thumbnail by default if deck exists
-                            $('#deckThumbnailsContainerWrapper .card-preview-thumbnail-wrapper').first().addClass('selected-thumb');
-                            displayMainCard(processedCardsToRender[0], processedCardsToRender); 
-                        }
-
-                        if (processedCardsToRender.length > 0) { // Changed from >1 to >0 to show thumbs even for 1 card
+                        if (cardsToDisplay.length > 0) {
+                            displayMainCard(cardsToDisplay[0]); // Display the first card
                             const $thumbnailsContainer = $('#deckThumbnailsContainer');
-                            $thumbnailsContainer.empty(); // Clear before adding new ones
+                            $thumbnailsContainer.empty(); 
                             $('#deckThumbnailsContainerWrapper').show().find('h6').show();
-
-                            processedCardsToRender.forEach((cardInst, idx) => {
-                                renderThumbnail(cardInst, cardWidth, cardHeight, idx, $thumbnailsContainer, processedCardsToRender);
+                            cardsToDisplay.forEach((cardInst, idx) => {
+                                renderThumbnail(cardInst, dataCache.originalCardWidth, dataCache.originalCardHeight, idx, $thumbnailsContainer, cardsToDisplay);
                             });
+                            if ($thumbnailsContainer.children().length > 0) {
+                                $thumbnailsContainer.children().first().addClass('selected-thumb');
+                                $('#flipCardBtn').show(); // Show flip button
+                            }
                         }
                     } else {
                         $('#errorMessage').text(data.message || 'Error generating card. Details: ' + (data.details || JSON.stringify(data.error) || 'Unknown error')).show();

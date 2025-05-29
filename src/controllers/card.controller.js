@@ -1,4 +1,5 @@
 // src/controllers/card.controller.js
+const Box = require('../models/Box.model'); // May need for auth/context
 const Card = require('../models/Card.model');
 const aiService = require('../services/ai.service');
 const mongoose = require('mongoose');
@@ -19,6 +20,118 @@ You are a data generation assistant. Your ONLY task is to provide concise, raw d
 - Adhere strictly to these formatting and content rules.
 `;
 
+
+exports.getCardsByBox = async (req, res) => {
+    try {
+        const { boxId } = req.params;
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
+
+        // Optional: Check if user owns the box
+        const box = await Box.findOne({ _id: boxId, userId });
+        if (!box) return res.status(404).json({ message: "Box not found or not authorized."});
+
+        const cards = await Card.find({ boxId }).sort({ orderInBox: 1 });
+        res.status(200).json(cards);
+    } catch (error) { /* ... */ }
+};
+
+exports.getCardById = async (req, res) => { /* ... (mostly same, but ensure auth checks if needed) ... */ };
+
+exports.createCardInBox = async (req, res) => {
+    try {
+        const { boxId } = req.params;
+        const { name, widthPx, heightPx, cardFrontElements, cardBackElements, orderInBox } = req.body;
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
+
+        const box = await Box.findOne({ _id: boxId, userId });
+        if (!box) return res.status(404).json({ message: "Box not found or not authorized." });
+
+        const newCard = new Card({
+            name: name || 'New Card',
+            boxId,
+            userId,
+            widthPx: widthPx || box.defaultCardWidthPx,
+            heightPx: heightPx || box.defaultCardHeightPx,
+            cardFrontElements: cardFrontElements || [], // Start with empty elements if not provided
+            cardBackElements: cardBackElements || [],
+            orderInBox: orderInBox || (await Card.countDocuments({ boxId })) // Simple way to append
+        });
+        const savedCard = await newCard.save();
+        res.status(201).json(savedCard);
+    } catch (error) { /* ... */ }
+};
+
+exports.updateCardDetails = async (req, res) => { /* ... update name, orderInBox etc. ... */ };
+exports.deleteCard = async (req, res) => { /* ... delete a single card ... */ };
+
+// --- Card Element Management ---
+// Helper function to get the correct element array (front or back)
+const getElementArrayPath = (face) => {
+    return face === 'back' ? 'cardBackElements' : 'cardFrontElements';
+};
+
+exports.addCardElement = async (req, res) => {
+    try {
+        const { cardId } = req.params;
+        const { face = 'front' } = req.query; // ?face=front or ?face=back
+        const { type, ...elementProps } = req.body;
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
+
+        if (!type) return res.status(400).json({ message: "Element type is required." });
+
+        const elementArrayPath = getElementArrayPath(face);
+        const newElement = { elementId: uuidv4(), type, ...elementProps };
+
+        const updatedCard = await Card.findOneAndUpdate(
+            { _id: cardId, userId }, // Ensure user owns card
+            { $push: { [elementArrayPath]: newElement }, $set: { updatedAt: Date.now() } },
+            { new: true, runValidators: true }
+        );
+        if (!updatedCard) return res.status(404).json({ message: "Card not found or not authorized." });
+        res.status(200).json(updatedCard);
+    } catch (error) { /* ... */ }
+};
+
+exports.updateCardElement = async (req, res) => {
+    try {
+        const { cardId, elementId } = req.params; // elementId here is our custom uuid
+        const { face = 'front' } = req.query;
+        const updates = req.body; // e.g., { x: 10, y: 20, content: "New Text" }
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
+
+        const elementArrayPath = getElementArrayPath(face);
+        const setUpdates = {};
+        for (const key in updates) {
+            setUpdates[`${elementArrayPath}.$.${key}`] = updates[key];
+        }
+        setUpdates[`${elementArrayPath}.$.updatedAt`] = Date.now(); // If elements had timestamps
+
+        const updatedCard = await Card.findOneAndUpdate(
+            { _id: cardId, userId, [`${elementArrayPath}.elementId`]: elementId },
+            { $set: setUpdates },
+            { new: true, runValidators: true }
+        );
+        if (!updatedCard) return res.status(404).json({ message: "Card or element not found, or not authorized." });
+        res.status(200).json(updatedCard);
+    } catch (error) { /* ... */ }
+};
+
+exports.deleteCardElement = async (req, res) => {
+    try {
+        const { cardId, elementId } = req.params;
+        const { face = 'front' } = req.query;
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
+
+        const elementArrayPath = getElementArrayPath(face);
+        const updatedCard = await Card.findOneAndUpdate(
+            { _id: cardId, userId },
+            { $pull: { [elementArrayPath]: { elementId: elementId } } },
+            { new: true }
+        );
+        if (!updatedCard) return res.status(404).json({ message: "Card not found or not authorized." });
+        res.status(200).json(updatedCard);
+    } catch (error) { /* ... */ }
+};
 
 
 exports.generateCardWithAI = async (req, res) => {
