@@ -816,6 +816,8 @@
                     // if (response.ok && backendResponseData.box && backendResponseData.cards && backendResponseData.cards.length > 0) {
                     if (response.ok) {
                         console.log("Box and Deck received:", backendResponseData);
+                        $('#loadingIndicator').hide();
+                        $generateButton.prop('disabled', false).text('Create Card Design');
                         dataCache.currentBox = backendResponseData.box;
                         dataCache.currentDeck = JSON.parse(JSON.stringify(backendResponseData.cards)); // Store pristine deck
                         dataCache.imageWasAIgeneratedForDeck = backendResponseData.imageWasAIgenerated; // For the deck's front image
