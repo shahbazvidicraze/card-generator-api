@@ -29,7 +29,7 @@ exports.getCardsByBox = async (req, res) => {
 
         // Optional: Check if user owns the box
         const box = await Box.findOne({ _id: boxId, userId });
-        if (!box) return res.status(404).json({ message: "Box not found or not authorized."});
+        if (!box) return res.status(404).json({ success:false, message: "Box not found or not authorized."});
 
         const cards = await Card.find({ boxId }).sort({ orderInBox: 1 });
         successResponse(res, "Cards for box retrieved.", cards);
@@ -332,9 +332,11 @@ exports.deleteCardElement = async (req, res) => {
             { $pull: { [elementArrayPath]: { elementId: elementId } } },
             { new: true }
         );
-        if (!updatedCard) return res.status(404).json({ message: "Card not found or not authorized." });
-        res.status(200).json(updatedCard);
-    } catch (error) { /* ... */ }
+        if (!updatedCard) return res.status(404).json({ success:false, message: "Card not found or not authorized." });
+        successResponse(res, "Card element deleted successfully.", updatedCard);
+    } catch (error) { 
+        errorResponse(res, "Failed to delete card element.", 500, "DELETE_CARD_ELEMENT_FAILED", error.message);
+     }
 };
 
 
@@ -348,7 +350,7 @@ exports.generateCardWithAI = async (req, res) => {
         } = req.body;
 
         if (!prompt) {
-            return res.status(400).json({ message: "Prompt is required." });
+            return res.status(400).json({ success:false, message: "Prompt is required." });
         }
 
         const base64ImageDataUriFromAI = await aiService.generateImageWithStabilityAI(
@@ -392,20 +394,20 @@ exports.generateCardWithAI = async (req, res) => {
 
         await newCard.save();
         // res.status(201).json({ message: "Card generated successfully!", card: newCard });
-        res.status(201).json({ message: "Card generated successfully!", card: newCard, artUrl: newCard.cardArtUrl });
+        res.status(201).json({ success:true, message: "Card generated successfully!", card: newCard, artUrl: newCard.cardArtUrl });
 
     } catch (error) {
         console.error("Error in generateCardWithAI Controller:", error.message);
         // Handle specific errors thrown by ai.service.js or other issues
         if (error.message.includes("Stability AI returned an empty image")) {
-            return res.status(502).json({ message: "AI service reported an empty image.", details: error.message });
+            return res.status(502).json({ success:false, message: "AI service reported an empty image.", details: error.message });
         } else if (error.message.includes("Stability AI API key")) {
-            return res.status(500).json({ message: "AI service not configured.", details: error.message });
+            return res.status(500).json({ success:false, message: "AI service not configured.", details: error.message });
         } else if (error.message.includes("Stability AI")) { // Catches other Stability/Axios errors
-            return res.status(502).json({ message: "AI image generation failed.", details: error.message });
+            return res.status(502).json({ success:false, message: "AI image generation failed.", details: error.message });
         }
         // Generic fallback
-        res.status(500).json({ message: "Error generating card.", error: error.message });
+        res.status(500).json({ success:false, message: error.message });
     }
 };
 

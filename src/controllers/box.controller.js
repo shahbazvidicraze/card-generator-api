@@ -295,60 +295,57 @@ exports.getBoxById = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; 
 
         if (!mongoose.Types.ObjectId.isValid(boxId)) {
-            return res.status(400).json({ success: false, message: "Invalid Box ID format." });
+            return errorResponse(res, "Invalid Box ID format.", 400, "INVALID_ID");
         }
 
-        const box = await Box.findOne({ _id: boxId, userId });
-        if (!box) {
-            return res.status(404).json({ success: false, message: "Box not found or not authorized." });
-        }
+        // 1. Find the Box and populate its own element ID fields
+        const boxFromDB = await Box.findOne({ _id: boxId, userId })
+            .populate('boxFrontElementIds') // Populate box's front elements
+            .populate('boxBackElementIds')   // Populate box's back elements
+            .lean(); // Get plain JavaScript objects for easier manipulation
 
-        // Fetch cards and populate both front and back element IDs
-        const cardsFromDB = await Card.find({ boxId: box._id })
-            .populate('cardFrontElementIds') // This will populate with Element documents
-            .populate('cardBackElementIds')   // This will populate with Element documents
+        if (!boxFromDB) {
+            return errorResponse(res, "Box not found or not authorized.", 404, "NOT_FOUND");
+        }
+        console.log(`BOX_CONTROLLER: Found box ${boxId}. Populating its cards and their elements...`);
+
+        // 2. Find all Cards belonging to this Box
+        //    and populate their element IDs to get the actual element objects.
+        const cardsFromDB = await Card.find({ boxId: boxFromDB._id })
+            .populate('cardFrontElementIds')
+            .populate('cardBackElementIds')
             .sort({ orderInBox: 1 })
-            .lean(); // Get plain JavaScript objects
-
+            .lean(); 
         console.log(`BOX_CONTROLLER: Found ${cardsFromDB.length} cards for box ${boxId}.`);
 
-        // Now, cardsFromDB has cardFrontElementIds and cardBackElementIds as arrays of Element objects.
-        // We need to reconstruct the response to have both the IDs and the full objects under different names.
-
+        // 3. Structure cards for the response (to have both IDs and populated Elements)
         const cardsForResponse = cardsFromDB.map(card => {
-            // 'card' is already a plain JS object because of .lean()
-            
-            // Create the new structure for the response
-            const responseCard = {
-                _id: card._id,
-                name: card.name,
-                boxId: card.boxId,
-                userId: card.userId,
-                orderInBox: card.orderInBox,
-                widthPx: card.widthPx,
-                heightPx: card.heightPx,
-                metadata: card.metadata,
-                createdAt: card.createdAt,
-                updatedAt: card.updatedAt,
-                __v: card.__v, // If you want to include it
-
-                // 1. Store the populated elements in the desired fields
-                cardFrontElements: card.cardFrontElementIds || [], // After populate, this holds Element objects
-                cardBackElements: card.cardBackElementIds || [],   // After populate, this holds Element objects
-
-                // 2. Re-extract just the IDs for the *_ElementIds fields
-                //    The populated card.cardFrontElementIds now contains objects, so we map back to their _id
-                cardFrontElementIds: (card.cardFrontElementIds || []).map(element => element._id),
-                cardBackElementIds: (card.cardBackElementIds || []).map(element => element._id),
-            };
+            const responseCard = { ...card }; // Already a plain object due to .lean()
+            // Rename/copy populated ID arrays to desired element object arrays
+            responseCard.cardFrontElements = card.cardFrontElementIds || [];
+            responseCard.cardBackElements = card.cardBackElementIds || [];
+            // Re-create the ID-only arrays from the populated objects
+            responseCard.cardFrontElementIds = (card.cardFrontElementIds || []).map(element => element._id);
+            responseCard.cardBackElementIds = (card.cardBackElementIds || []).map(element => element._id);
             return responseCard;
         });
 
-        const boxResponseObject = box.toObject(); // Get plain object for the box
-        boxResponseObject.cards = cardsForResponse;
+        // 4. Structure the Box object for the response
+        const boxResponseObject = { ...boxFromDB }; // Already a plain object due to .lean()
+        
+        // Rename/copy populated box element ID arrays to desired element object arrays
+        boxResponseObject.boxFrontElements = boxFromDB.boxFrontElementIds || [];
+        boxResponseObject.boxBackElements = boxFromDB.boxBackElementIds || [];
+        // Re-create the ID-only arrays for box elements
+        boxResponseObject.boxFrontElementIds = (boxFromDB.boxFrontElementIds || []).map(element => element._id);
+        boxResponseObject.boxBackElementIds = (boxFromDB.boxBackElementIds || []).map(element => element._id);
+        
+        boxResponseObject.cards = cardsForResponse; // Assign the array of fully populated cards
 
         successResponse(res, "Box details retrieved successfully.", boxResponseObject);
+
     } catch (error) {
+        console.error("Error in getBoxById Controller:", error.message, error.stack);
         errorResponse(res, "Error fetching box details.", 500, "FETCH_BOX_FAILED", error.message);
     }
 };
@@ -443,7 +440,7 @@ exports.deleteBox = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
 
         const box = await Box.findOneAndDelete({ _id: boxId, userId });
-        if (!box) return res.status(404).json({ message: "Box not found or not authorized." });
+        if (!box) return res.status(404).json({ success:false, message: "Box not found or not authorized." });
 
         // Delete all cards associated with this box
         await Card.deleteMany({ boxId: boxId });
@@ -476,17 +473,17 @@ exports.addBoxElement = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder from auth
 
         if (!mongoose.Types.ObjectId.isValid(boxId)) {
-            return res.status(400).json({ message: 'Invalid Box ID format.' });
+            return res.status(400).json({ success:false, message: 'Invalid Box ID format.' });
         }
         if (!type || !['text', 'image', 'shape'].includes(type)) {
-            return res.status(400).json({ message: `Invalid or missing element type. Received: ${type}` });
+            return res.status(400).json({ success:false, message: `Invalid or missing element type. Received: ${type}` });
         }
 
         // 1. Find the parent box and verify ownership
         const box = await Box.findOne({ _id: boxId, userId });
         if (!box) {
             console.log("Box not found or user not authorized for boxId:", boxId);
-            return res.status(404).json({ message: "Box not found or not authorized." });
+            return res.status(404).json({ success:false, message: "Box not found or not authorized." });
         }
         console.log("Found parent box:", box.name);
 
@@ -528,7 +525,7 @@ exports.addBoxElement = async (req, res) => {
 
         if (!updatedBox) {
             await Element.findByIdAndDelete(savedElement._id); // Rollback element creation
-            return res.status(500).json({ message: "Failed to link element to box." });
+            return res.status(500).json({ success:false, message: "Failed to link element to box." });
         }
         
         // Prepare response similarly to getBoxById if you want populated elements
@@ -558,16 +555,16 @@ exports.updateBoxElement = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
 
         if (!mongoose.Types.ObjectId.isValid(boxId) || !mongoose.Types.ObjectId.isValid(elementId)) {
-            return res.status(400).json({ message: "Invalid Box or Element ID format." });
+            return res.status(400).json({ success:false, message: "Invalid Box or Element ID format." });
         }
         if (Object.keys(updates).length === 0) {
-            return res.status(400).json({ message: "No update fields provided." });
+            return res.status(400).json({ success:false, message: "No update fields provided." });
         }
 
         // 1. Verify user owns the box (optional, but good for security)
         const box = await Box.findOne({ _id: boxId, userId });
         if (!box) {
-            return res.status(404).json({ message: "Box not found or not authorized." });
+            return res.status(404).json({ success:false, message: "Box not found or not authorized." });
         }
 
         // 2. Find and update the Element document
@@ -579,7 +576,7 @@ exports.updateBoxElement = async (req, res) => {
         );
 
         if (!updatedElement) {
-            return res.status(404).json({ message: "Element not found on this box, or not authorized to update it." });
+            return res.status(404).json({ success:false, message: "Element not found on this box, or not authorized to update it." });
         }
         
         // Return the updated Box with populated elements for context
@@ -609,13 +606,13 @@ exports.deleteBoxElement = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
 
         if (!mongoose.Types.ObjectId.isValid(boxId) || !mongoose.Types.ObjectId.isValid(elementId)) {
-            return res.status(400).json({ message: "Invalid Box or Element ID format." });
+            return res.status(400).json({ success:false, message: "Invalid Box or Element ID format." });
         }
         
         // 1. Find the element to determine if it's front or back (and for auth)
         const elementToDelete = await Element.findOne({ _id: elementId, boxId: boxId, userId: userId });
         if (!elementToDelete) {
-            return res.status(404).json({ message: "Element not found on this box or not authorized." });
+            return res.status(404).json({ success:false, message: "Element not found on this box or not authorized." });
         }
 
         // 2. Delete the Element document itself
@@ -636,7 +633,7 @@ exports.deleteBoxElement = async (req, res) => {
         if (!updatedBox) {
              // This case should be rare if the box was found earlier, but means the $pull didn't modify anything
             console.error("Box not found during $pull operation for element deletion, or element was already removed.");
-            return res.status(404).json({ message: "Box not found or element already removed." });
+            return res.status(404).json({ success:false, message: "Box not found or element already removed." });
         }
 
         const boxResponseObject = updatedBox.toObject();
