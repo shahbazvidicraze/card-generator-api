@@ -1,6 +1,7 @@
 // src/controllers/card.controller.js
 const Box = require('../models/Box.model'); // May need for auth/context
 const Card = require('../models/Card.model');
+const Element = require('../models/Element.model');
 const aiService = require('../services/ai.service');
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
@@ -35,8 +36,6 @@ exports.getCardsByBox = async (req, res) => {
     } catch (error) { /* ... */ }
 };
 
-exports.getCardById = async (req, res) => { /* ... (mostly same, but ensure auth checks if needed) ... */ };
-
 exports.createCardInBox = async (req, res) => {
     try {
         const { boxId } = req.params;
@@ -61,35 +60,205 @@ exports.createCardInBox = async (req, res) => {
     } catch (error) { /* ... */ }
 };
 
-exports.updateCardDetails = async (req, res) => { /* ... update name, orderInBox etc. ... */ };
-exports.deleteCard = async (req, res) => { /* ... delete a single card ... */ };
+exports.updateCardDetails = async (req, res) => {
+    console.log(`CARD_CONTROLLER: updateCardDetails called for cardId: ${req.params.cardId}`);
+    try {
+        const { cardId } = req.params;
+        const { name, orderInBox, metadata } = req.body; // Whitelisted fields to update
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder for user ID
 
-// --- Card Element Management ---
-// Helper function to get the correct element array (front or back)
+        if (!mongoose.Types.ObjectId.isValid(cardId)) {
+            return res.status(400).json({ message: "Invalid Card ID format." });
+        }
+
+        const updates = {};
+        if (name !== undefined && typeof name === 'string') updates.name = name.trim();
+        if (orderInBox !== undefined && typeof orderInBox === 'number') updates.orderInBox = orderInBox;
+        if (metadata && typeof metadata === 'object') {
+            // For nested metadata, you might need to merge or set specific sub-fields
+            // Simple approach: replace the whole metadata object if provided
+            // More complex: use dot notation for specific fields e.g., "metadata.someKey"
+            updates.metadata = metadata;
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ message: "No valid fields provided for update." });
+        }
+
+        updates.updatedAt = Date.now(); // Manually update if not relying solely on Mongoose timestamps for this
+
+        // Find the card and ensure the authenticated user owns it (via box or direct userId on card)
+        // This authorization check depends on your exact data model and auth strategy.
+        // For now, assuming userId is directly on the Card model for simplicity of this check.
+        const card = await Card.findOne({ _id: cardId, userId });
+        if (!card) {
+            return res.status(404).json({ message: "Card not found or you are not authorized to update it." });
+        }
+
+        // If card belongs to a box, you might re-verify box ownership:
+        // const box = await Box.findOne({ _id: card.boxId, userId });
+        // if (!box) {
+        //     return res.status(403).json({ message: "Not authorized to update cards in this box." });
+        // }
+
+        const updatedCard = await Card.findByIdAndUpdate(
+            cardId,
+            { $set: updates },
+            { new: true, runValidators: true } // new: true returns the modified document
+        ).populate('cardFrontElementIds').populate('cardBackElementIds'); // Populate for response
+
+        if (!updatedCard) { // Should be caught by the findOne check above, but good safety
+            return res.status(404).json({ message: "Card not found after update attempt." });
+        }
+        
+        // Similar to getCardById, structure the response
+        const cardResponseObject = updatedCard.toObject();
+        cardResponseObject.cardFrontElements = (updatedCard.cardFrontElementIds || []).map(el => el.toObject ? el.toObject() : el);
+        cardResponseObject.cardBackElements = (updatedCard.cardBackElementIds || []).map(el => el.toObject ? el.toObject() : el);
+        // If you want to keep the IDs arrays as well:
+        cardResponseObject.cardFrontElementIds = (updatedCard.cardFrontElementIds || []).map(el => el._id);
+        cardResponseObject.cardBackElementIds = (updatedCard.cardBackElementIds || []).map(el => el._id);
+
+
+        res.status(200).json(cardResponseObject);
+        console.log(`CARD_CONTROLLER: Card ${cardId} details updated successfully.`);
+
+    } catch (error) {
+        console.error("Error in updateCardDetails Controller:", error.message, error.stack);
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ message: "Validation Error", errors: error.errors });
+        }
+        res.status(500).json({ message: "Error updating card details.", error: error.message });
+    }
+};
+
+exports.deleteCard = async (req, res) => {
+    console.log(`CARD_CONTROLLER: deleteCard called for cardId: ${req.params.cardId}`);
+    try {
+        const { cardId } = req.params;
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder for user ID
+
+        if (!mongoose.Types.ObjectId.isValid(cardId)) {
+            return res.status(400).json({ message: "Invalid Card ID format." });
+        }
+
+        // 1. Find the card to ensure user ownership and to get element IDs for deletion
+        const cardToDelete = await Card.findOne({ _id: cardId, userId });
+
+        if (!cardToDelete) {
+            return res.status(404).json({ message: "Card not found or you are not authorized to delete it." });
+        }
+
+        // 2. Collect all element IDs associated with this card
+        const elementIdsToDelete = [
+            ...(cardToDelete.cardFrontElementIds || []),
+            ...(cardToDelete.cardBackElementIds || [])
+        ];
+
+        // 3. Delete the associated elements from the Element collection
+        if (elementIdsToDelete.length > 0) {
+            const deleteResult = await Element.deleteMany({ 
+                _id: { $in: elementIdsToDelete },
+                userId: userId // Extra safety: ensure user owns these elements too
+            });
+            console.log(`CARD_CONTROLLER: Deleted ${deleteResult.deletedCount} elements associated with card ${cardId}.`);
+        }
+
+        // 4. Delete the card itself
+        await Card.findByIdAndDelete(cardId); // cardToDelete._id is the same as cardId
+
+        res.status(200).json({ message: `Card ${cardId} and its elements deleted successfully.` });
+        console.log(`CARD_CONTROLLER: Card ${cardId} deleted successfully.`);
+
+    } catch (error) {
+        console.error("Error in deleteCard Controller:", error.message, error.stack);
+        res.status(500).json({ message: "Error deleting card.", error: error.message });
+    }
+};
+
+// Helper function (if not already global or imported)
 const getElementArrayPath = (face) => {
-    return face === 'back' ? 'cardBackElements' : 'cardFrontElements';
+    return face === 'back' ? 'cardBackElementIds' : 'cardFrontElementIds';
 };
 
 exports.addCardElement = async (req, res) => {
+    console.log(`CARD_CONTROLLER: addCardElement called for cardId: ${req.params.cardId}, query:`, req.query);
     try {
         const { cardId } = req.params;
-        const { face = 'front' } = req.query; // ?face=front or ?face=back
+        const { face = 'front' } = req.query; // Default to 'front' if not specified
         const { type, ...elementProps } = req.body;
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
 
-        if (!type) return res.status(400).json({ message: "Element type is required." });
+        console.log("Payload for new element:", { type, ...elementProps });
 
-        const elementArrayPath = getElementArrayPath(face);
-        const newElement = { elementId: uuidv4(), type, ...elementProps };
+        if (!mongoose.Types.ObjectId.isValid(cardId)) {
+            return res.status(400).json({ message: 'Invalid Card ID format.' });
+        }
+        if (!type || !['text', 'image', 'shape'].includes(type)) { // Check against your ElementSchema enums
+            return res.status(400).json({ message: `Invalid or missing element type. Received: ${type}` });
+        }
 
-        const updatedCard = await Card.findOneAndUpdate(
-            { _id: cardId, userId }, // Ensure user owns card
-            { $push: { [elementArrayPath]: newElement }, $set: { updatedAt: Date.now() } },
+        // 1. Find the parent card and verify ownership
+        const card = await Card.findOne({ _id: cardId, userId });
+        if (!card) {
+            console.log("Card not found or user not authorized for cardId:", cardId);
+            return res.status(404).json({ message: "Card not found or not authorized." });
+        }
+        console.log("Found parent card:", card.name);
+
+        // 2. Create the new Element document
+        const newElementData = {
+            cardId: card._id,
+            boxId: card.boxId,
+            userId: card.userId, // Or req.user.id if elements have their own owner separate from card owner
+            isFrontElement: face === 'front',
+            type,
+            ...elementProps
+            // elementId: uuidv4() // Not needed if Element is its own model, Mongoose provides _id
+        };
+        console.log("Data for new Element document:", newElementData);
+
+        const newElementDoc = new Element(newElementData);
+        const savedElement = await newElementDoc.save();
+        console.log("New Element saved, ID:", savedElement._id);
+
+        // 3. Add the new element's ID to the card's appropriate element ID array
+        const elementIdArrayPath = getElementArrayPath(face); // 'cardFrontElementIds' or 'cardBackElementIds'
+        console.log("Pushing element ID to path:", elementIdArrayPath);
+
+        const updatedCard = await Card.findByIdAndUpdate(
+            cardId,
+            { $push: { [elementIdArrayPath]: savedElement._id }, $set: { updatedAt: Date.now() } },
             { new: true, runValidators: true }
-        );
-        if (!updatedCard) return res.status(404).json({ message: "Card not found or not authorized." });
-        res.status(200).json(updatedCard);
-    } catch (error) { /* ... */ }
+        )
+        .populate('cardFrontElementIds') // Populate for the response
+        .populate('cardBackElementIds');
+
+        if (!updatedCard) { // Should be rare if previous check passed
+            console.error("Failed to update card after adding element ID. CardId:", cardId);
+            // Potentially roll back element creation if card update fails
+            await Element.findByIdAndDelete(savedElement._id);
+            return res.status(500).json({ message: "Failed to link element to card." });
+        }
+        
+        console.log("Card updated with new element ID. Responding with populated card.");
+        // Structure response like getCardById
+        const cardResponseObject = updatedCard.toObject();
+        cardResponseObject.cardFrontElements = (updatedCard.cardFrontElementIds || []).map(el => el.toObject ? el.toObject() : el);
+        cardResponseObject.cardBackElements = (updatedCard.cardBackElementIds || []).map(el => el.toObject ? el.toObject() : el);
+        cardResponseObject.cardFrontElementIds = (updatedCard.cardFrontElementIds || []).map(el => el._id); // Keep original IDs
+        cardResponseObject.cardBackElementIds = (updatedCard.cardBackElementIds || []).map(el => el._id);
+
+
+        res.status(200).json(cardResponseObject);
+
+    } catch (error) {
+        console.error("Error in addCardElement Controller:", error.message, error.stack);
+        if (error.name === 'ValidationError') { // Mongoose validation error for Element or Card
+            return res.status(400).json({ message: "Validation Error adding element", errors: error.errors });
+        }
+        res.status(500).json({ message: 'Error adding element to card', error: error.message });
+    }
 };
 
 exports.updateCardElement = async (req, res) => {
@@ -266,39 +435,70 @@ exports.addElementToCard = async (req, res) => {
     }
 };
 
-
-// ... rest of controller (getCardById, getAllCards)
-// Add mongoose require if not there
-// const mongoose = require('mongoose');
-
 exports.getCardById = async (req, res) => {
-    try 
-    {
-        console.log(res)
+    console.log(`CARD_CONTROLLER: getCardById called for cardId: ${req.params.cardId}`);
+    try {
         const { cardId } = req.params;
+        // Assuming userId would be checked if cards are user-specific, e.g., through box ownership
+        // const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; 
 
-        // Validate if cardId is a valid MongoDB ObjectId
-        if (!mongoose.Types.ObjectId.isValid(cardId)) { // <--- THIS CHECK IS FAILING
-            return res.status(400).json({ message: 'Invalid Card ID format.' });
+        if (!mongoose.Types.ObjectId.isValid(cardId)) {
+            return res.status(400).json({ message: "Invalid Card ID format." });
         }
 
-        const card = await Card.findById(cardId);
+        // 1. Find the Card and populate its element ID fields
+        const cardFromDB = await Card.findById(cardId)
+            // .findOne({ _id: cardId, userId }) // If you need to check ownership via userId on the card
+            .populate('cardFrontElementIds') // Populate with Element documents
+            .populate('cardBackElementIds')   // Populate with Element documents
+            .lean(); // Get a plain JavaScript object
 
-        // const { cardId } = req.params;
-        // if (!mongoose.Types.ObjectId.isValid(cardId)) {
-        //     return res.status(400).json({ message: 'Invalid Card ID format.' });
-        // }
-        // const card = await Card.findById(req.params.cardId);
-        if (!card) {
-            return res.status(404).json({ message: 'Card not found' });
+        if (!cardFromDB) {
+            return res.status(404).json({ message: "Card not found or not authorized." });
         }
-        res.status(200).json(card);
+        console.log(`CARD_CONTROLLER: Found card ${cardId}.`);
+
+        // 2. Construct the response object with the desired structure
+        // 'cardFromDB' is already a plain JS object due to .lean()
+        // The populated 'cardFrontElementIds' and 'cardBackElementIds' now hold arrays of Element objects.
+
+        const cardResponseObject = {
+            _id: cardFromDB._id,
+            name: cardFromDB.name,
+            boxId: cardFromDB.boxId,
+            userId: cardFromDB.userId,
+            orderInBox: cardFromDB.orderInBox,
+            widthPx: cardFromDB.widthPx,
+            heightPx: cardFromDB.heightPx,
+            metadata: cardFromDB.metadata,
+            createdAt: cardFromDB.createdAt,
+            updatedAt: cardFromDB.updatedAt,
+            __v: cardFromDB.__v, // If you wish to include it
+
+            // A. Store the populated elements in the desired fields
+            cardFrontElements: cardFromDB.cardFrontElementIds || [], // After populate, this holds Element objects
+            cardBackElements: cardFromDB.cardBackElementIds || [],   // After populate, this holds Element objects
+
+            // B. Re-extract just the IDs for the *_ElementIds fields from the populated arrays
+            cardFrontElementIds: (cardFromDB.cardFrontElementIds || []).map(element => element._id),
+            cardBackElementIds: (cardFromDB.cardBackElementIds || []).map(element => element._id),
+        };
+        
+        // If you also store originalDeckRequest or promptUsed on the card model, add them here:
+        if (cardFromDB.originalDeckRequest) {
+            cardResponseObject.originalDeckRequest = cardFromDB.originalDeckRequest;
+        }
+        if (cardFromDB.promptUsed) {
+            cardResponseObject.promptUsed = cardFromDB.promptUsed;
+        }
+
+
+        res.status(200).json(cardResponseObject);
+        console.log("CARD_CONTROLLER: Sent populated card data.");
+
     } catch (error) {
-        console.error("Error in getCardById:", error);
-        if (error.name === 'CastError') {
-             return res.status(400).json({ message: 'Invalid Card ID format (cast error).', error: error.message });
-        }
-        res.status(500).json({ message: 'Error fetching card', error: error.message });
+        console.error("Error in getCardById Controller:", error.message, error.stack);
+        res.status(500).json({ message: "Error fetching card details.", error: error.message });
     }
 };
 
@@ -351,23 +551,6 @@ exports.generateTextForCard = async (req, res) => {
         res.status(500).json({ message: "Error generating dummy card data.", error: error.message });
     }
 };
-
-// Helper function to find the closest supported aspect ratio string
-function getClosestSupportedAspectRatio(width, height, supportedRatios) {
-    if (height === 0) return "1:1";
-    const targetRatio = width / height;
-    let closestRatioString = "1:1";
-    let smallestDifference = Infinity;
-    supportedRatios.forEach(ratioObj => {
-        const difference = Math.abs(targetRatio - ratioObj.value);
-        if (difference < smallestDifference) {
-            smallestDifference = difference;
-            closestRatioString = ratioObj.string;
-        }
-    });
-    console.log(`Target ratio for image: ${targetRatio.toFixed(2)}, Chosen supported Stability AI ratio string: ${closestRatioString}`);
-    return closestRatioString;
-}
 
 exports.generateFullCardFromPromptOld = async (req, res) => {
     try {
@@ -529,7 +712,7 @@ function getClosestSupportedAspectRatio(width, height, supportedRatios) {
     return closestRatioString;
 }
 
-exports.generateFullCardFromPrompt = async (req, res) => {
+exports.generateFullCardFromPromptOldOld = async (req, res) => {
     try {
         const {
             userPrompt,

@@ -7,8 +7,23 @@ const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 
 // --- Constants (can be moved to a config file) ---
-const CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION = `...`; // Your full instruction
-const DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL = "https://via.placeholder.com/600x800.png?text=Image+Error";
+const CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION = `
+You are a data generation assistant. Your ONLY task is to provide concise, raw data examples based on the user's request, suitable for populating fields on a card.
+- Output must be like problem-solving game.
+- Alway change scenarios and also don't include answers.
+- keep the questions basic and non-conceptual.
+- keep the game level to most basic.
+- Output ONLY the requested data items.
+- Each distinct data item should be on a new line.
+- Do NOT include any titles, headings, explanations, introductions, summaries, or conversational text (e.g., "Here are some examples:", "I hope this helps!").
+- If the user asks for "examples of X", provide only the examples of X, not a description of X.
+- If the user asks for "questions for Y", provide only the questions for Y.
+- If the user asks for "stats for Z", provide only the stats for Z.
+- Think of your output as directly filling a spreadsheet or a list on a game card.
+- Adhere strictly to these formatting and content rules.
+`;
+
+const DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL = "";
 
 function getClosestSupportedAspectRatio(width, height, supportedRatios) { /* ... same helper ... */ }
 
@@ -67,7 +82,6 @@ exports.generateNewDeckAndBox = async (req, res) => {
             .catch(err => { textGenError = err.message; return null; });
         [aiFrontImageDataUri, generatedTextListData] = await Promise.all([imagePromise, textPromise]);
 
-
         // --- 3. Process AI Results ---
         const aiFrontImageGeneratedSuccessfully = !!aiFrontImageDataUri;
         const textListGeneratedSuccessfully = !!generatedTextListData;
@@ -80,6 +94,24 @@ exports.generateNewDeckAndBox = async (req, res) => {
         let textItemsArray = []; /* ... populate textItemsArray or placeholders ... */
         const finalTextsForCards = []; /* ... ensure targetNumTexts ... */
 
+        if (textListGeneratedSuccessfully && typeof generatedTextListData === 'string') {
+            // Split Gemini's multi-line response into an array of individual text items
+            textItemsArray = generatedTextListData.split('\n')
+                                            .map(item => item.trim()) // Remove leading/trailing whitespace from each item
+                                            .filter(item => item.length > 0); // Remove any empty lines
+        } else {
+            for (let i = 0; i < numCardsInDeck; i++) {
+                textItemsArray.push(`[Placeholder - Text Gen Failed - Card ${i + 1} - Topic: ${userPrompt} - Error: ${textGenerationError || 'Unknown'}]`);
+            }
+        }
+
+        for (let i = 0; i < numCardsInDeck; i++) {
+            if (i < textItemsArray.length && textItemsArray[i]) { // Check if item exists and is not empty
+                finalTextsForCards.push(textItemsArray[i]);
+            } else {
+                finalTextsForCards.push(`[Placeholder - Card ${i + 1} - Item missing or empty from AI]`);
+            }
+        }
         // --- 4. Create Box Document (without cards initially) ---
         const newBoxData = {
             name: boxName.trim(), description: boxDescription, userId,
@@ -219,21 +251,157 @@ exports.getUserBoxes = async (req, res) => {
 };
 
 exports.getBoxById = async (req, res) => {
+    console.log(`BOX_CONTROLLER: getBoxById called for boxId: ${req.params.boxId}`);
     try {
         const { boxId } = req.params;
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; 
 
-        const box = await Box.findOne({ _id: boxId, userId }); // Ensure user owns the box
-        if (!box) return res.status(404).json({ message: "Box not found or not authorized." });
+        if (!mongoose.Types.ObjectId.isValid(boxId)) {
+            return res.status(400).json({ message: "Invalid Box ID format." });
+        }
 
-        // Optionally populate cards
-        const cardsInBox = await Card.find({ boxId: box._id }).sort({ orderInBox: 1 });
+        const box = await Box.findOne({ _id: boxId, userId });
+        if (!box) {
+            return res.status(404).json({ message: "Box not found or not authorized." });
+        }
 
-        res.status(200).json({ box, cards: cardsInBox });
-    } catch (error) { /* ... */ }
+        // Fetch cards and populate both front and back element IDs
+        const cardsFromDB = await Card.find({ boxId: box._id })
+            .populate('cardFrontElementIds') // This will populate with Element documents
+            .populate('cardBackElementIds')   // This will populate with Element documents
+            .sort({ orderInBox: 1 })
+            .lean(); // Get plain JavaScript objects
+
+        console.log(`BOX_CONTROLLER: Found ${cardsFromDB.length} cards for box ${boxId}.`);
+
+        // Now, cardsFromDB has cardFrontElementIds and cardBackElementIds as arrays of Element objects.
+        // We need to reconstruct the response to have both the IDs and the full objects under different names.
+
+        const cardsForResponse = cardsFromDB.map(card => {
+            // 'card' is already a plain JS object because of .lean()
+            
+            // Create the new structure for the response
+            const responseCard = {
+                _id: card._id,
+                name: card.name,
+                boxId: card.boxId,
+                userId: card.userId,
+                orderInBox: card.orderInBox,
+                widthPx: card.widthPx,
+                heightPx: card.heightPx,
+                metadata: card.metadata,
+                createdAt: card.createdAt,
+                updatedAt: card.updatedAt,
+                __v: card.__v, // If you want to include it
+
+                // 1. Store the populated elements in the desired fields
+                cardFrontElements: card.cardFrontElementIds || [], // After populate, this holds Element objects
+                cardBackElements: card.cardBackElementIds || [],   // After populate, this holds Element objects
+
+                // 2. Re-extract just the IDs for the *_ElementIds fields
+                //    The populated card.cardFrontElementIds now contains objects, so we map back to their _id
+                cardFrontElementIds: (card.cardFrontElementIds || []).map(element => element._id),
+                cardBackElementIds: (card.cardBackElementIds || []).map(element => element._id),
+            };
+            return responseCard;
+        });
+
+        const boxResponseObject = box.toObject(); // Get plain object for the box
+        boxResponseObject.cards = cardsForResponse;
+
+        res.status(200).json(boxResponseObject);
+
+    } catch (error) {
+        console.error("Error in getBoxById Controller:", error.message, error.stack);
+        res.status(500).json({ message: "Error fetching box details.", error: error.message });
+    }
 };
 
-exports.updateBox = async (req, res) => { /* ... update box details ... */ };
+exports.updateBox = async (req, res) => {
+    console.log(`BOX_CONTROLLER: updateBox called for boxId: ${req.params.boxId}`);
+    try {
+        const { boxId } = req.params;
+        const { 
+            name, 
+            description, 
+            defaultCardWidthPx, 
+            defaultCardHeightPx
+            // Potentially other fields like baseAISettings if you want to update them here
+        } = req.body;
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder for user ID
+
+        if (!mongoose.Types.ObjectId.isValid(boxId)) {
+            return res.status(400).json({ message: "Invalid Box ID format." });
+        }
+
+        const updates = {};
+        if (name !== undefined) {
+            if (typeof name === 'string' && name.trim() !== '') {
+                updates.name = name.trim();
+            } else {
+                return res.status(400).json({ message: "Box name, if provided, must be a non-empty string." });
+            }
+        }
+        if (description !== undefined) updates.description = description; // Allow empty string for description
+        if (defaultCardWidthPx !== undefined) {
+            if (typeof defaultCardWidthPx === 'number' && defaultCardWidthPx > 0) {
+                updates.defaultCardWidthPx = defaultCardWidthPx;
+            } else {
+                 return res.status(400).json({ message: "Default card width, if provided, must be a positive number." });
+            }
+        }
+        if (defaultCardHeightPx !== undefined) {
+             if (typeof defaultCardHeightPx === 'number' && defaultCardHeightPx > 0) {
+                updates.defaultCardHeightPx = defaultCardHeightPx;
+            } else {
+                 return res.status(400).json({ message: "Default card height, if provided, must be a positive number." });
+            }
+        }
+        // Add logic here if you want to update parts of baseAISettings, e.g.:
+        // if (req.body.baseAISettings && typeof req.body.baseAISettings.userPrompt === 'string') {
+        //     updates['baseAISettings.userPrompt'] = req.body.baseAISettings.userPrompt;
+        // }
+
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ message: "No valid fields provided for update." });
+        }
+
+        updates.updatedAt = Date.now(); // Explicitly set for good measure
+
+        const updatedBox = await Box.findOneAndUpdate(
+            { _id: boxId, userId: userId }, // Ensure user owns the box
+            { $set: updates },
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedBox) {
+            return res.status(404).json({ message: "Box not found or you are not authorized to update it." });
+        }
+
+        // If you want to return the box with its cards populated (like getBoxById):
+        // const cardsInBox = await Card.find({ boxId: updatedBox._id })
+        //     .populate('cardFrontElementIds')
+        //     .populate('cardBackElementIds')
+        //     .sort({ orderInBox: 1 })
+        //     .lean();
+        // const boxResponseObject = updatedBox.toObject();
+        // boxResponseObject.cards = cardsInBox.map(card => { /* ... map to desired card structure ... */ });
+        // res.status(200).json(boxResponseObject);
+        
+        // For a simpler update response, just return the updated box:
+        res.status(200).json(updatedBox);
+        console.log(`BOX_CONTROLLER: Box ${boxId} updated successfully.`);
+
+    } catch (error) {
+        console.error("Error in updateBox Controller:", error.message, error.stack);
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ message: "Validation Error", errors: error.errors });
+        }
+        res.status(500).json({ message: "Error updating box.", error: error.message });
+    }
+};
+
 exports.deleteBox = async (req, res) => {
     try {
         const { boxId } = req.params;
@@ -252,6 +420,191 @@ exports.deleteBox = async (req, res) => {
 // TODO: addBoxElement, updateBoxElement, deleteBoxElement (for box art)
 // These would modify box.boxFrontElements or box.boxBackElements
 // Similar to how card elements are managed, but on the Box model.
-exports.addBoxElement = async (req, res) => { /* ... */ };
-exports.updateBoxElement = async (req, res) => { /* ... */ };
-exports.deleteBoxElement = async (req, res) => { /* ... */ };
+// Helper function to get the correct element array path for Box elements
+const getBoxElementArrayPath = (face) => {
+    return face === 'back' ? 'boxBackElementIds' : 'boxFrontElementIds';
+};
+
+// --- Box Element Management ---
+
+exports.addBoxElement = async (req, res) => {
+    console.log(`BOX_CONTROLLER: addBoxElement called for boxId: ${req.params.boxId}, query:`, req.query);
+    try {
+        const { boxId } = req.params;
+        const { face = 'front' } = req.query; // ?face=front or ?face=back
+        const { type, ...elementProps } = req.body;
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder from auth
+
+        if (!mongoose.Types.ObjectId.isValid(boxId)) {
+            return res.status(400).json({ message: 'Invalid Box ID format.' });
+        }
+        if (!type || !['text', 'image', 'shape'].includes(type)) {
+            return res.status(400).json({ message: `Invalid or missing element type. Received: ${type}` });
+        }
+
+        // 1. Find the parent box and verify ownership
+        const box = await Box.findOne({ _id: boxId, userId });
+        if (!box) {
+            console.log("Box not found or user not authorized for boxId:", boxId);
+            return res.status(404).json({ message: "Box not found or not authorized." });
+        }
+        console.log("Found parent box:", box.name);
+
+        // 2. Create the new Element document for the Box
+        const newElementData = {
+            // cardId: null, // Explicitly null as this element belongs to a Box
+            boxId: box._id, // Link to this box
+            userId: box.userId, // Inherit userId
+            isFrontElement: face === 'front', // Could be for box front/back
+            type,
+            ...elementProps
+        };
+        console.log("Data for new Box Element document:", newElementData);
+
+        const newElementDoc = new Element(newElementData);
+        const savedElement = await newElementDoc.save();
+        console.log("New Box Element saved, ID:", savedElement._id);
+
+        // 3. Add the new element's ID to the box's appropriate element ID array
+        const elementIdArrayPath = getBoxElementArrayPath(face); // 'boxFrontElementIds' or 'boxBackElementIds'
+        console.log("Pushing element ID to Box path:", elementIdArrayPath);
+
+        const updatedBox = await Box.findByIdAndUpdate(
+            boxId,
+            { $push: { [elementIdArrayPath]: savedElement._id }, $set: { updatedAt: Date.now() } },
+            { new: true, runValidators: true }
+        )
+        .populate('boxFrontElementIds') // Populate for the response
+        .populate('boxBackElementIds');
+
+        if (!updatedBox) {
+            await Element.findByIdAndDelete(savedElement._id); // Rollback element creation
+            return res.status(500).json({ message: "Failed to link element to box." });
+        }
+        
+        // Prepare response similarly to getBoxById if you want populated elements
+        const boxResponseObject = updatedBox.toObject();
+        boxResponseObject.boxFrontElements = (updatedBox.boxFrontElementIds || []).map(el => el.toObject ? el.toObject() : el);
+        boxResponseObject.boxBackElements = (updatedBox.boxBackElementIds || []).map(el => el.toObject ? el.toObject() : el);
+        // Keep original IDs arrays if frontend needs them
+        // boxResponseObject.boxFrontElementIds = (updatedBox.boxFrontElementIds || []).map(el => el._id);
+        // boxResponseObject.boxBackElementIds = (updatedBox.boxBackElementIds || []).map(el => el._id);
+
+
+        res.status(200).json(boxResponseObject);
+        console.log("Box updated with new element ID.");
+
+    } catch (error) {
+        console.error("Error in addBoxElement Controller:", error.message, error.stack);
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ message: "Validation Error adding box element", errors: error.errors });
+        }
+        res.status(500).json({ message: 'Error adding element to box', error: error.message });
+    }
+};
+
+exports.updateBoxElement = async (req, res) => {
+    console.log(`BOX_CONTROLLER: updateBoxElement called for boxId: ${req.params.boxId}, elementId: ${req.params.elementId}`);
+    try {
+        const { boxId, elementId } = req.params; // elementId is Element's _id
+        // const { face = 'front' } = req.query; // Not strictly needed if elementId is globally unique
+        const updates = req.body; // e.g., { x: 10, y: 20, content: "New Text" }
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
+
+        if (!mongoose.Types.ObjectId.isValid(boxId) || !mongoose.Types.ObjectId.isValid(elementId)) {
+            return res.status(400).json({ message: "Invalid Box or Element ID format." });
+        }
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ message: "No update fields provided." });
+        }
+
+        // 1. Verify user owns the box (optional, but good for security)
+        const box = await Box.findOne({ _id: boxId, userId });
+        if (!box) {
+            return res.status(404).json({ message: "Box not found or not authorized." });
+        }
+
+        // 2. Find and update the Element document
+        // Ensure the element belongs to this user and this box
+        const updatedElement = await Element.findOneAndUpdate(
+            { _id: elementId, boxId: boxId, userId: userId },
+            { $set: updates },
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedElement) {
+            return res.status(404).json({ message: "Element not found on this box, or not authorized to update it." });
+        }
+        
+        // Return the updated Box with populated elements for context
+        const updatedBoxWithPopulatedElements = await Box.findById(boxId)
+            .populate('boxFrontElementIds')
+            .populate('boxBackElementIds');
+
+        const boxResponseObject = updatedBoxWithPopulatedElements.toObject();
+        boxResponseObject.boxFrontElements = (updatedBoxWithPopulatedElements.boxFrontElementIds || []).map(el => el.toObject ? el.toObject() : el);
+        boxResponseObject.boxBackElements = (updatedBoxWithPopulatedElements.boxBackElementIds || []).map(el => el.toObject ? el.toObject() : el);
+
+
+        res.status(200).json({ message: "Box element updated.", element: updatedElement.toObject(), box: boxResponseObject });
+        console.log(`Box Element ${elementId} updated.`);
+
+    } catch (error) {
+        console.error("Error in updateBoxElement Controller:", error.message, error.stack);
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ message: "Validation Error updating box element", errors: error.errors });
+        }
+        res.status(500).json({ message: 'Error updating box element', error: error.message });
+    }
+};
+
+exports.deleteBoxElement = async (req, res) => {
+    console.log(`BOX_CONTROLLER: deleteBoxElement called for boxId: ${req.params.boxId}, elementId: ${req.params.elementId}`);
+    try {
+        const { boxId, elementId } = req.params;
+        // const { face = 'front' } = req.query; // Needed to know which array to $pull from
+        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
+
+        if (!mongoose.Types.ObjectId.isValid(boxId) || !mongoose.Types.ObjectId.isValid(elementId)) {
+            return res.status(400).json({ message: "Invalid Box or Element ID format." });
+        }
+        
+        // 1. Find the element to determine if it's front or back (and for auth)
+        const elementToDelete = await Element.findOne({ _id: elementId, boxId: boxId, userId: userId });
+        if (!elementToDelete) {
+            return res.status(404).json({ message: "Element not found on this box or not authorized." });
+        }
+
+        // 2. Delete the Element document itself
+        await Element.findByIdAndDelete(elementId);
+        console.log(`Box Element ${elementId} deleted from Elements collection.`);
+
+        // 3. Pull the element's ID from the Box's appropriate array
+        const elementIdArrayPath = elementToDelete.isFrontElement ? 'boxFrontElementIds' : 'boxBackElementIds';
+        
+        const updatedBox = await Box.findByIdAndUpdate(
+            boxId,
+            { $pull: { [elementIdArrayPath]: elementId }, $set: {updatedAt: Date.now()} },
+            { new: true }
+        )
+        .populate('boxFrontElementIds')
+        .populate('boxBackElementIds');
+
+        if (!updatedBox) {
+             // This case should be rare if the box was found earlier, but means the $pull didn't modify anything
+            console.error("Box not found during $pull operation for element deletion, or element was already removed.");
+            return res.status(404).json({ message: "Box not found or element already removed." });
+        }
+
+        const boxResponseObject = updatedBox.toObject();
+        boxResponseObject.boxFrontElements = (updatedBox.boxFrontElementIds || []).map(el => el.toObject ? el.toObject() : el);
+        boxResponseObject.boxBackElements = (updatedBox.boxBackElementIds || []).map(el => el.toObject ? el.toObject() : el);
+
+        res.status(200).json({ message: "Box element deleted successfully.", box: boxResponseObject });
+        console.log(`Element ${elementId} removed from box ${boxId}.`);
+
+    } catch (error) {
+        console.error("Error in deleteBoxElement Controller:", error.message, error.stack);
+        res.status(500).json({ message: 'Error deleting box element', error: error.message });
+    }
+};
