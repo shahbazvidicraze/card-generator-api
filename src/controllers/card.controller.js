@@ -32,9 +32,25 @@ exports.getCardsByBox = async (req, res) => {
         if (!box) return res.status(404).json({ message: "Box not found or not authorized."});
 
         const cards = await Card.find({ boxId }).sort({ orderInBox: 1 });
-        res.status(200).json(cards);
-    } catch (error) { /* ... */ }
+        successResponse(res, "Cards for box retrieved.", cards);
+    } catch (error) {
+        errorResponse(res, "Failed to retrieve cards for box.", 500, "FETCH_CARDS_FAILED", error.message);
+    }
 };
+
+// --- Standard Success Response ---
+function successResponse(res, message, data, statusCode = 200, metadata = null) {
+    const response = { success: true, message, data };
+    if (metadata) response.metadata = metadata;
+    res.status(statusCode).json(response);
+}
+
+// --- Standard Error Response ---
+function errorResponse(res, message, statusCode = 500, errorCode = null, details = null) {
+    const errorPayload = { details: details || message };
+    if (errorCode) errorPayload.code = errorCode;
+    res.status(statusCode).json({ success: false, message: errorPayload.details });
+}
 
 exports.createCardInBox = async (req, res) => {
     try {
@@ -43,7 +59,7 @@ exports.createCardInBox = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
 
         const box = await Box.findOne({ _id: boxId, userId });
-        if (!box) return res.status(404).json({ message: "Box not found or not authorized." });
+        if (!box) return res.status(404).json({ success:false, message: "Box not found or not authorized." });
 
         const newCard = new Card({
             name: name || 'New Card',
@@ -56,8 +72,10 @@ exports.createCardInBox = async (req, res) => {
             orderInBox: orderInBox || (await Card.countDocuments({ boxId })) // Simple way to append
         });
         const savedCard = await newCard.save();
-        res.status(201).json(savedCard);
-    } catch (error) { /* ... */ }
+        successResponse(res, "Card created successfully.", savedCard);
+    } catch (error) { 
+        errorResponse(res, "Failed to create card in box.", 500, "CREATE_CARD_FAILED", error.message);
+     }
 };
 
 exports.updateCardDetails = async (req, res) => {
@@ -68,7 +86,7 @@ exports.updateCardDetails = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder for user ID
 
         if (!mongoose.Types.ObjectId.isValid(cardId)) {
-            return res.status(400).json({ message: "Invalid Card ID format." });
+            return res.status(400).json({ success:false, message: "Invalid Card ID format." });
         }
 
         const updates = {};
@@ -82,7 +100,7 @@ exports.updateCardDetails = async (req, res) => {
         }
 
         if (Object.keys(updates).length === 0) {
-            return res.status(400).json({ message: "No valid fields provided for update." });
+            return res.status(400).json({ success:false, message: "No valid fields provided for update." });
         }
 
         updates.updatedAt = Date.now(); // Manually update if not relying solely on Mongoose timestamps for this
@@ -92,7 +110,7 @@ exports.updateCardDetails = async (req, res) => {
         // For now, assuming userId is directly on the Card model for simplicity of this check.
         const card = await Card.findOne({ _id: cardId, userId });
         if (!card) {
-            return res.status(404).json({ message: "Card not found or you are not authorized to update it." });
+            return res.status(404).json({ success:false, message: "Card not found or you are not authorized to update it." });
         }
 
         // If card belongs to a box, you might re-verify box ownership:
@@ -108,7 +126,7 @@ exports.updateCardDetails = async (req, res) => {
         ).populate('cardFrontElementIds').populate('cardBackElementIds'); // Populate for response
 
         if (!updatedCard) { // Should be caught by the findOne check above, but good safety
-            return res.status(404).json({ message: "Card not found after update attempt." });
+            return res.status(404).json({ success:false, message: "Card not found after update attempt." });
         }
         
         // Similar to getCardById, structure the response
@@ -120,15 +138,15 @@ exports.updateCardDetails = async (req, res) => {
         cardResponseObject.cardBackElementIds = (updatedCard.cardBackElementIds || []).map(el => el._id);
 
 
-        res.status(200).json(cardResponseObject);
+        successResponse(res, "Card details updated successfully.", cardResponseObject);
         console.log(`CARD_CONTROLLER: Card ${cardId} details updated successfully.`);
 
     } catch (error) {
         console.error("Error in updateCardDetails Controller:", error.message, error.stack);
         if (error.name === 'ValidationError') {
-            return res.status(400).json({ message: "Validation Error", errors: error.errors });
+            errorResponse(res, "Failed to update card details for box.", 400, "UPDATE_CARD_DEETAILS_VALIDATION_FAILED", error.message);
         }
-        res.status(500).json({ message: "Error updating card details.", error: error.message });
+        errorResponse(res, "Error updating card details.", 500, "UPDATE_CARD_DEETAILS_VALIDATION_FAILED", error.message);
     }
 };
 
@@ -139,14 +157,14 @@ exports.deleteCard = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder for user ID
 
         if (!mongoose.Types.ObjectId.isValid(cardId)) {
-            return res.status(400).json({ message: "Invalid Card ID format." });
+            return res.status(400).json({ success:false, message: "Invalid Card ID format." });
         }
 
         // 1. Find the card to ensure user ownership and to get element IDs for deletion
         const cardToDelete = await Card.findOne({ _id: cardId, userId });
 
         if (!cardToDelete) {
-            return res.status(404).json({ message: "Card not found or you are not authorized to delete it." });
+            return res.status(404).json({ success:false, message: "Card not found or you are not authorized to delete it." });
         }
 
         // 2. Collect all element IDs associated with this card
@@ -167,12 +185,12 @@ exports.deleteCard = async (req, res) => {
         // 4. Delete the card itself
         await Card.findByIdAndDelete(cardId); // cardToDelete._id is the same as cardId
 
-        res.status(200).json({ message: `Card ${cardId} and its elements deleted successfully.` });
+        successResponse(res, `Card ${cardId} and its elements deleted successfully.`);
         console.log(`CARD_CONTROLLER: Card ${cardId} deleted successfully.`);
 
     } catch (error) {
         console.error("Error in deleteCard Controller:", error.message, error.stack);
-        res.status(500).json({ message: "Error deleting card.", error: error.message });
+        errorResponse(res, "Error deleting card.", 500, "DELETE_CARD_FAILED", error.message);
     }
 };
 
@@ -198,17 +216,17 @@ exports.addCardElement = async (req, res) => {
         console.log("Payload for new card element:", { type, isFrontElementFromBody, ...elementProps });
 
         if (!mongoose.Types.ObjectId.isValid(cardId)) {
-            return res.status(400).json({ message: 'Invalid Card ID format.' });
+            return res.status(400).json({ success:false, message: 'Invalid Card ID format.' });
         }
         if (!type || !['text', 'image', 'shape'].includes(type)) {
-            return res.status(400).json({ message: `Invalid or missing element type. Received: ${type}` });
+            return res.status(400).json({ success:false, message: `Invalid or missing element type. Received: ${type}` });
         }
 
         // 1. Find the parent card and verify ownership
         const card = await Card.findOne({ _id: cardId, userId });
         if (!card) {
             console.log("Card not found or user not authorized for cardId:", cardId);
-            return res.status(404).json({ message: "Card not found or not authorized." });
+            return res.status(404).json({ success:false, message: "Card not found or not authorized." });
         }
         console.log("Found parent card:", card.name);
 
@@ -253,7 +271,7 @@ exports.addCardElement = async (req, res) => {
             console.error("Failed to update card after adding element ID. CardId:", cardId);
             // Potentially roll back element creation if card update fails
             await Element.findByIdAndDelete(savedElement._id);
-            return res.status(500).json({ message: "Failed to link element to card." });
+            return res.status(500).json({ success:false, message: "Failed to link element to card." });
         }
         
         console.log("Card updated with new element ID. Responding with populated card.");
@@ -264,15 +282,15 @@ exports.addCardElement = async (req, res) => {
         cardResponseObject.cardFrontElementIds = (updatedCard.cardFrontElementIds || []).map(el => el._id); // Keep original IDs
         cardResponseObject.cardBackElementIds = (updatedCard.cardBackElementIds || []).map(el => el._id);
 
-
-        res.status(200).json(cardResponseObject);
+        successResponse(res, "Card element added successfully.", cardResponseObject);
 
     } catch (error) {
         console.error("Error in addCardElement Controller:", error.message, error.stack);
         if (error.name === 'ValidationError') { // Mongoose validation error for Element or Card
-            return res.status(400).json({ message: "Validation Error adding element", errors: error.errors });
+            errorResponse(res, "Validation Error adding element", 400, "ADD_CARD_ELEMENT_VALIDATION_FAILED", error.message);
         }
-        res.status(500).json({ message: 'Error adding element to card', error: error.message });
+
+        errorResponse(res, 'Error adding element to card', 500, "ADD_CARD_ELEMENT_FAILED", error.message);
     }
 };
 
@@ -295,9 +313,11 @@ exports.updateCardElement = async (req, res) => {
             { $set: setUpdates },
             { new: true, runValidators: true }
         );
-        if (!updatedCard) return res.status(404).json({ message: "Card or element not found, or not authorized." });
-        res.status(200).json(updatedCard);
-    } catch (error) { /* ... */ }
+        if (!updatedCard) return res.status(404).json({ success:false, message: "Card or element not found, or not authorized." });
+        successResponse(res, "Card element updated successfully.", updatedCard);
+    } catch (error) { 
+        errorResponse(res, "Failed to update card element.", 500, "UPDATE_CARD_ELEMENT_FAILED", error.message);
+     }
 };
 
 exports.deleteCardElement = async (req, res) => {
@@ -396,16 +416,16 @@ exports.addElementToCard = async (req, res) => {
         const { type, ...elementProps } = req.body; // Element type and its properties
 
         if (!mongoose.Types.ObjectId.isValid(cardId)) {
-            return res.status(400).json({ message: 'Invalid Card ID format.' });
+            return res.status(400).json({ success:false, message: 'Invalid Card ID format.' });
         }
 
         if (!type || !['text', 'image'].includes(type)) { // Add more types as you support them
-            return res.status(400).json({ message: 'Invalid or missing element type.' });
+            return res.status(400).json({ success:false, message: 'Invalid or missing element type.' });
         }
 
         const card = await Card.findById(cardId);
         if (!card) {
-            return res.status(404).json({ message: 'Card not found.' });
+            return res.status(404).json({ success:false, message: 'Card not found.' });
         }
 
         const newElement = {
@@ -417,10 +437,10 @@ exports.addElementToCard = async (req, res) => {
         // Validate required fields based on type (optional, but good practice)
         if (type === 'text' && (typeof newElement.content === 'undefined')) {
             // newElement.content = ''; // Or return error:
-            return res.status(400).json({ message: 'Text content is required for text element.'});
+            return res.status(400).json({ success:false, message: 'Text content is required for text element.'});
         }
         if (type === 'image' && !newElement.imageUrl) {
-            return res.status(400).json({ message: 'Image URL is required for image element.'});
+            return res.status(400).json({ success:false, message: 'Image URL is required for image element.'});
         }
 
 
@@ -436,17 +456,17 @@ exports.addElementToCard = async (req, res) => {
         );
 
         if (!updatedCard) { // Should not happen if findById worked, but good check
-            return res.status(404).json({ message: 'Card not found after update attempt.' });
+            return res.status(404).json({ success:false, message: 'Card not found after update attempt.' });
         }
 
-        res.status(200).json({ message: 'Element added successfully', card: updatedCard });
+        successResponse(res, 'Element added successfully', updatedCard);
 
     } catch (error) {
         console.error("Error in addElementToCard:", error);
         if (error.name === 'ValidationError') {
-            return res.status(400).json({ message: "Validation Error", errors: error.errors });
+            errorResponse(res, "Failed to add elements to card.", 400, "ADD_CARD_ELEMENT_VALIDATION_FAILED", error.message);
         }
-        res.status(500).json({ message: 'Error adding element to card', error: error.message });
+        errorResponse(res, "Failed to add elements to card.", 500, "ADD_CARD_ELEMENT_VALIDATION_FAILED", error.message);
     }
 };
 
@@ -458,7 +478,7 @@ exports.getCardById = async (req, res) => {
         // const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; 
 
         if (!mongoose.Types.ObjectId.isValid(cardId)) {
-            return res.status(400).json({ message: "Invalid Card ID format." });
+            return res.status(400).json({ success:false, message: "Invalid Card ID format." });
         }
 
         // 1. Find the Card and populate its element ID fields
@@ -469,7 +489,7 @@ exports.getCardById = async (req, res) => {
             .lean(); // Get a plain JavaScript object
 
         if (!cardFromDB) {
-            return res.status(404).json({ message: "Card not found or not authorized." });
+            return res.status(404).json({ success:false, message: "Card not found or not authorized." });
         }
         console.log(`CARD_CONTROLLER: Found card ${cardId}.`);
 
@@ -508,22 +528,22 @@ exports.getCardById = async (req, res) => {
         }
 
 
-        res.status(200).json(cardResponseObject);
+        successResponse(res, "Card retrieved successfully.", cardResponseObject);
         console.log("CARD_CONTROLLER: Sent populated card data.");
 
     } catch (error) {
         console.error("Error in getCardById Controller:", error.message, error.stack);
-        res.status(500).json({ message: "Error fetching card details.", error: error.message });
+        errorResponse(res, "Error fetching card details.", 500, "FETCH_CARD_FAILED", error.message);
     }
 };
 
 exports.getAllCards = async (req, res) => {
     try {
         const cards = await Card.find().sort({ createdAt: -1 });
-        res.status(200).json(cards);
+        successResponse(res, 'Cards retrieved successfully', cards);
     } catch (error) {
         console.error("Error in getAllCards:", error);
-        res.status(500).json({ message: 'Error fetching cards', error: error.message });
+        errorResponse(res, 'Error fetching cards', 500, "FETCH_CARD_FAILED", error.message);
     }
 };
 
@@ -533,7 +553,7 @@ exports.generateTextForCard = async (req, res) => {
         const userRawPrompt = req.body.prompt;
 
         if (!userRawPrompt || userRawPrompt.trim() === '') {
-            return res.status(400).json({ message: "A prompt describing the desired card data is required." });
+            return res.status(400).json({ success:false, message: "A prompt describing the desired card data is required." });
         }
 
         // Structure the prompt for the AI service
@@ -550,6 +570,7 @@ exports.generateTextForCard = async (req, res) => {
         const cleanedText = generatedText.trim();
 
         res.status(200).json({
+            success: true,
             message: "Dummy data generated successfully.",
             requestedTopic: userRawPrompt,
             // systemInstructionsUsed: CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION, // For debugging if needed

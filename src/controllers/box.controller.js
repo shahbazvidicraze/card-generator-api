@@ -25,7 +25,36 @@ You are a data generation assistant. Your ONLY task is to provide concise, raw d
 
 const DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL ="";
 
-function getClosestSupportedAspectRatio(width, height, supportedRatios) { /* ... same helper ... */ }
+// Helper function to find the closest supported aspect ratio string
+function getClosestSupportedAspectRatio(width, height, supportedRatios) {
+    if (height === 0) return "1:1";
+    const targetRatio = width / height;
+    let closestRatioString = "1:1";
+    let smallestDifference = Infinity;
+    supportedRatios.forEach(ratioObj => {
+        const difference = Math.abs(targetRatio - ratioObj.value);
+        if (difference < smallestDifference) {
+            smallestDifference = difference;
+            closestRatioString = ratioObj.string;
+        }
+    });
+    console.log(`Target ratio for image: ${targetRatio.toFixed(2)}, Chosen supported Stability AI ratio string: ${closestRatioString}`);
+    return closestRatioString;
+}
+
+// --- Standard Success Response ---
+function successResponse(res, message, data, statusCode = 200, metadata = null) {
+    const response = { success: true, message, data };
+    if (metadata) response.metadata = metadata;
+    res.status(statusCode).json(response);
+}
+
+// --- Standard Error Response ---
+function errorResponse(res, message, statusCode = 500, errorCode = null, details = null) {
+    const errorPayload = { details: details || message };
+    if (errorCode) errorPayload.code = errorCode;
+    res.status(statusCode).json({ success: false, message: errorPayload.details });
+}
 
 // This is the function we worked on, moved here
 exports.generateNewDeckAndBox = async (req, res) => {
@@ -42,10 +71,10 @@ exports.generateNewDeckAndBox = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
 
         if (typeof boxName !== 'string' || boxName.trim() === '') {
-            return res.status(400).json({ message: "Box name is required and must be a valid string." });
+            return res.status(400).json({ success: false, message: "Box name is required and must be a valid string." });
         }
         if (!userPrompt || typeof userPrompt !== 'string' || userPrompt.trim() === '') {
-            return res.status(400).json({ message: "A user prompt is required." });
+            return res.status(400).json({ success: false, message: "A user prompt is required." });
         }
         // ... other validations for numCardsInDeck etc. ...
 
@@ -87,7 +116,7 @@ exports.generateNewDeckAndBox = async (req, res) => {
         const textListGeneratedSuccessfully = !!generatedTextListData;
 
         if (!aiFrontImageGeneratedSuccessfully && !textListGeneratedSuccessfully && !fallbackFrontImageBase64DataUri && !DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL) {
-            return res.status(502).json({ message: "Both AI failed, no fallbacks available." });
+            return res.status(502).json({ success: false, message: "Both AI failed, no fallbacks available." });
         }
         
         let finalFrontImageToUse = aiFrontImageGeneratedSuccessfully ? aiFrontImageDataUri : (fallbackFrontImageBase64DataUri || DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL);
@@ -213,13 +242,18 @@ exports.generateNewDeckAndBox = async (req, res) => {
         const boxResponseObject = savedBox.toObject();
         boxResponseObject.cards = generatedCardsDataForResponse; // Embed fully populated cards
 
-        res.status(201).json(boxResponseObject);
+        // Add flags to top-level data if preferred, or keep in metadata of box/cards
+        const responseData = {
+            box: boxResponseObject, // The primary data is the box with its cards
+            imageWasAIgenerated: aiFrontImageGeneratedSuccessfully,
+            textListWasGenerated: textListGeneratedSuccessfully
+        };
+        
+        successResponse(res, `Box "${savedBox.name}" and ${generatedCardsDataForResponse.length} cards created.`, responseData, 201);
 
     } catch (error) {
         console.error("Error in generateNewDeckAndBox Controller:", error.message, error.stack);
-        if (!res.headersSent) {
-            res.status(500).json({ message: "Error generating new deck and box.", error: error.message });
-        }
+        errorResponse(res, "Error generating new deck and box.", 500, "DECK_GENERATION_FAILED", error.message);
     }
     console.log("CONTROLLER: generateNewDeckAndBox finished.");
 };
@@ -228,17 +262,19 @@ exports.createBox = async (req, res) => {
     try {
         const { name, description, defaultCardWidthPx, defaultCardHeightPx } = req.body;
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
-        if (!name) return res.status(400).json({ message: "Box name is required." });
+        if (!name) return res.status(400).json({ success: false, message: "Box name is required." });
 
         const newBox = new Box({
             name, description, userId,
             defaultCardWidthPx, defaultCardHeightPx
         });
         const savedBox = await newBox.save();
-        res.status(201).json(savedBox);
+        successResponse(res, "Box created successfully.", savedBox, 201);
     } catch (error) {
-        console.error("Error creating box:", error);
-        res.status(500).json({ message: "Failed to create box", error: error.message });
+        if (error.name === 'ValidationError') {
+            return errorResponse(res, "Validation failed.", 400, "VALIDATION_ERROR", error.errors);
+        }
+        errorResponse(res, "Failed to create box.", 500, "BOX_CREATION_FAILED", error.message);
     }
 };
 
@@ -246,8 +282,10 @@ exports.getUserBoxes = async (req, res) => {
     try {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
         const boxes = await Box.find({ userId }).sort({ updatedAt: -1 });
-        res.status(200).json(boxes);
-    } catch (error) { /* ... */ }
+         successResponse(res, "User boxes retrieved successfully.", boxes);
+    } catch (error) {
+        errorResponse(res, "Failed to retrieve user boxes.", 500, "FETCH_BOXES_FAILED", error.message);
+    }
 };
 
 exports.getBoxById = async (req, res) => {
@@ -257,12 +295,12 @@ exports.getBoxById = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; 
 
         if (!mongoose.Types.ObjectId.isValid(boxId)) {
-            return res.status(400).json({ message: "Invalid Box ID format." });
+            return res.status(400).json({ success: false, message: "Invalid Box ID format." });
         }
 
         const box = await Box.findOne({ _id: boxId, userId });
         if (!box) {
-            return res.status(404).json({ message: "Box not found or not authorized." });
+            return res.status(404).json({ success: false, message: "Box not found or not authorized." });
         }
 
         // Fetch cards and populate both front and back element IDs
@@ -309,11 +347,9 @@ exports.getBoxById = async (req, res) => {
         const boxResponseObject = box.toObject(); // Get plain object for the box
         boxResponseObject.cards = cardsForResponse;
 
-        res.status(200).json(boxResponseObject);
-
+        successResponse(res, "Box details retrieved successfully.", boxResponseObject);
     } catch (error) {
-        console.error("Error in getBoxById Controller:", error.message, error.stack);
-        res.status(500).json({ message: "Error fetching box details.", error: error.message });
+        errorResponse(res, "Error fetching box details.", 500, "FETCH_BOX_FAILED", error.message);
     }
 };
 
@@ -331,7 +367,7 @@ exports.updateBox = async (req, res) => {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder for user ID
 
         if (!mongoose.Types.ObjectId.isValid(boxId)) {
-            return res.status(400).json({ message: "Invalid Box ID format." });
+            return res.status(400).json({success: false, message: "Invalid Box ID format." });
         }
 
         const updates = {};
@@ -339,7 +375,7 @@ exports.updateBox = async (req, res) => {
             if (typeof name === 'string' && name.trim() !== '') {
                 updates.name = name.trim();
             } else {
-                return res.status(400).json({ message: "Box name, if provided, must be a non-empty string." });
+                return res.status(400).json({ success: false, message: "Box name, if provided, must be a non-empty string." });
             }
         }
         if (description !== undefined) updates.description = description; // Allow empty string for description
@@ -347,14 +383,14 @@ exports.updateBox = async (req, res) => {
             if (typeof defaultCardWidthPx === 'number' && defaultCardWidthPx > 0) {
                 updates.defaultCardWidthPx = defaultCardWidthPx;
             } else {
-                 return res.status(400).json({ message: "Default card width, if provided, must be a positive number." });
+                 return res.status(400).json({ success: false, message: "Default card width, if provided, must be a positive number." });
             }
         }
         if (defaultCardHeightPx !== undefined) {
              if (typeof defaultCardHeightPx === 'number' && defaultCardHeightPx > 0) {
                 updates.defaultCardHeightPx = defaultCardHeightPx;
             } else {
-                 return res.status(400).json({ message: "Default card height, if provided, must be a positive number." });
+                 return res.status(400).json({ success: false, message: "Default card height, if provided, must be a positive number." });
             }
         }
         // Add logic here if you want to update parts of baseAISettings, e.g.:
@@ -364,7 +400,7 @@ exports.updateBox = async (req, res) => {
 
 
         if (Object.keys(updates).length === 0) {
-            return res.status(400).json({ message: "No valid fields provided for update." });
+            return res.status(400).json({ success: false, message: "No valid fields provided for update." });
         }
 
         updates.updatedAt = Date.now(); // Explicitly set for good measure
@@ -376,7 +412,7 @@ exports.updateBox = async (req, res) => {
         );
 
         if (!updatedBox) {
-            return res.status(404).json({ message: "Box not found or you are not authorized to update it." });
+            return res.status(404).json({ success: false, message: "Box not found or you are not authorized to update it." });
         }
 
         // If you want to return the box with its cards populated (like getBoxById):
@@ -390,15 +426,14 @@ exports.updateBox = async (req, res) => {
         // res.status(200).json(boxResponseObject);
         
         // For a simpler update response, just return the updated box:
-        res.status(200).json(updatedBox);
-        console.log(`BOX_CONTROLLER: Box ${boxId} updated successfully.`);
+       successResponse(res, "Box updated successfully.", updatedBox);
 
     } catch (error) {
         console.error("Error in updateBox Controller:", error.message, error.stack);
         if (error.name === 'ValidationError') {
-            return res.status(400).json({ message: "Validation Error", errors: error.errors });
+            errorResponse(res, "Validation Error", 400, "VALIDATION_ERROR", error.message);
         }
-        res.status(500).json({ message: "Error updating box.", error: error.message });
+        errorResponse(res, "Error updating box.", 500, "BOX_UPDATE_FAILED", error.message);
     }
 };
 
@@ -413,8 +448,10 @@ exports.deleteBox = async (req, res) => {
         // Delete all cards associated with this box
         await Card.deleteMany({ boxId: boxId });
         console.log(`Deleted box ${boxId} and its associated cards.`);
-        res.status(200).json({ message: "Box and associated cards deleted successfully." });
-    } catch (error) { /* ... */ }
+        successResponse(res, "Box and associated cards deleted successfully.", { boxId });
+    } catch (error) { 
+        errorResponse(res, "Error deleting box.", 500, "BOX_DELETE_FAILED", error.message);
+     }
 };
 
 // TODO: addBoxElement, updateBoxElement, deleteBoxElement (for box art)
@@ -503,15 +540,12 @@ exports.addBoxElement = async (req, res) => {
         // boxResponseObject.boxBackElementIds = (updatedBox.boxBackElementIds || []).map(el => el._id);
 
 
-        res.status(200).json(boxResponseObject);
-        console.log("Box updated with new element ID.");
-
+        successResponse(res, "Element added to box successfully.", boxResponseObject, 200);
     } catch (error) {
-        console.error("Error in addBoxElement Controller:", error.message, error.stack);
         if (error.name === 'ValidationError') {
-            return res.status(400).json({ message: "Validation Error adding box element", errors: error.errors });
+            return errorResponse(res, "Validation Error adding box element.", 400, "VALIDATION_ERROR", error.errors);
         }
-        res.status(500).json({ message: 'Error adding element to box', error: error.message });
+        errorResponse(res, 'Error adding element to box.', 500, "ADD_BOX_ELEMENT_FAILED", error.message);
     }
 };
 
@@ -557,16 +591,13 @@ exports.updateBoxElement = async (req, res) => {
         boxResponseObject.boxFrontElements = (updatedBoxWithPopulatedElements.boxFrontElementIds || []).map(el => el.toObject ? el.toObject() : el);
         boxResponseObject.boxBackElements = (updatedBoxWithPopulatedElements.boxBackElementIds || []).map(el => el.toObject ? el.toObject() : el);
 
-
-        res.status(200).json({ message: "Box element updated.", element: updatedElement.toObject(), box: boxResponseObject });
         console.log(`Box Element ${elementId} updated.`);
-
+        successResponse(res, "Box element updated successfully.", boxResponseObject, 200);
     } catch (error) {
-        console.error("Error in updateBoxElement Controller:", error.message, error.stack);
         if (error.name === 'ValidationError') {
-            return res.status(400).json({ message: "Validation Error updating box element", errors: error.errors });
+            return errorResponse(res, "Validation Error updating box element.", 400, "VALIDATION_ERROR", error.errors);
         }
-        res.status(500).json({ message: 'Error updating box element', error: error.message });
+        errorResponse(res, 'Error updating element to box.', 500, "UPDATE_BOX_ELEMENT_FAILED", error.message);
     }
 };
 
@@ -612,11 +643,8 @@ exports.deleteBoxElement = async (req, res) => {
         boxResponseObject.boxFrontElements = (updatedBox.boxFrontElementIds || []).map(el => el.toObject ? el.toObject() : el);
         boxResponseObject.boxBackElements = (updatedBox.boxBackElementIds || []).map(el => el.toObject ? el.toObject() : el);
 
-        res.status(200).json({ message: "Box element deleted successfully.", box: boxResponseObject });
-        console.log(`Element ${elementId} removed from box ${boxId}.`);
-
+        successResponse(res, "Box element deleted successfully.", boxResponseObject, 200);
     } catch (error) {
-        console.error("Error in deleteBoxElement Controller:", error.message, error.stack);
-        res.status(500).json({ message: 'Error deleting box element', error: error.message });
+        errorResponse(res, 'Error deleting box.', 500, "DELETE_BOX_ELEMENT_FAILED", error.message);
     }
 };
