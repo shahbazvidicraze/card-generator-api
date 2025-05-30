@@ -23,7 +23,7 @@ You are a data generation assistant. Your ONLY task is to provide concise, raw d
 - Adhere strictly to these formatting and content rules.
 `;
 
-const DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL = "";
+const DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL ="";
 
 function getClosestSupportedAspectRatio(width, height, supportedRatios) { /* ... same helper ... */ }
 
