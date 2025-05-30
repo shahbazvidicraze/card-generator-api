@@ -2,7 +2,7 @@
 const mongoose = require('mongoose');
 
 const ElementSchemaDef = {
-    cardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Card', required: true, index: true },
+    cardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Card', index: true },
     boxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Box', required: true, index: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // Assuming User model
     isFrontElement: { type: Boolean, required: true, default: true },

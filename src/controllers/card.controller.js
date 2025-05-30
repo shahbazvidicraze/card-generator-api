@@ -185,16 +185,22 @@ exports.addCardElement = async (req, res) => {
     console.log(`CARD_CONTROLLER: addCardElement called for cardId: ${req.params.cardId}, query:`, req.query);
     try {
         const { cardId } = req.params;
-        const { face = 'front' } = req.query; // Default to 'front' if not specified
-        const { type, ...elementProps } = req.body;
+        // const { face = 'front' } = req.query; // Default to 'front' if not specified
+        // const { type, ...elementProps } = req.body;
+        const { face = 'front' } = req.query; // Get 'face' from query as a default/fallback
+        const { 
+            type, 
+            isFrontElement: isFrontElementFromBody, // Destructure isFrontElement from body
+            ...elementProps 
+        } = req.body;
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
 
-        console.log("Payload for new element:", { type, ...elementProps });
+        console.log("Payload for new card element:", { type, isFrontElementFromBody, ...elementProps });
 
         if (!mongoose.Types.ObjectId.isValid(cardId)) {
             return res.status(400).json({ message: 'Invalid Card ID format.' });
         }
-        if (!type || !['text', 'image', 'shape'].includes(type)) { // Check against your ElementSchema enums
+        if (!type || !['text', 'image', 'shape'].includes(type)) {
             return res.status(400).json({ message: `Invalid or missing element type. Received: ${type}` });
         }
 
@@ -206,15 +212,24 @@ exports.addCardElement = async (req, res) => {
         }
         console.log("Found parent card:", card.name);
 
+        // --- Determine finalIsFront ---
+        let finalIsFront;
+        if (typeof isFrontElementFromBody === 'boolean') {
+            finalIsFront = isFrontElementFromBody; // Body value takes precedence
+            console.log(`CARD_CONTROLLER: Using isFrontElement from BODY: ${finalIsFront}`);
+        } else {
+            finalIsFront = face.toLowerCase() === 'front'; // Fallback to query param logic
+            console.log(`CARD_CONTROLLER: Using isFrontElement from QUERY param ('${face}'): ${finalIsFront}`);
+        }
+
         // 2. Create the new Element document
         const newElementData = {
             cardId: card._id,
-            boxId: card.boxId,
-            userId: card.userId, // Or req.user.id if elements have their own owner separate from card owner
-            isFrontElement: face === 'front',
+            boxId: card.boxId, // Get from parent card
+            userId: card.userId, // Inherit from card, or use req.user.id directly
+            isFrontElement: finalIsFront, // Use the determined boolean
             type,
             ...elementProps
-            // elementId: uuidv4() // Not needed if Element is its own model, Mongoose provides _id
         };
         console.log("Data for new Element document:", newElementData);
 

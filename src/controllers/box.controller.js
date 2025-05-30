@@ -431,8 +431,11 @@ exports.addBoxElement = async (req, res) => {
     console.log(`BOX_CONTROLLER: addBoxElement called for boxId: ${req.params.boxId}, query:`, req.query);
     try {
         const { boxId } = req.params;
-        const { face = 'front' } = req.query; // ?face=front or ?face=back
-        const { type, ...elementProps } = req.body;
+        // const { face = 'front' } = req.query; // ?face=front or ?face=back
+        // const { type, ...elementProps } = req.body;
+        
+        const { face = 'front' } = req.query; // Still get from query as a potential default
+        const { type, isFrontElement: isFrontElementFromBody, ...elementProps } = req.body;
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder from auth
 
         if (!mongoose.Types.ObjectId.isValid(boxId)) {
@@ -450,12 +453,21 @@ exports.addBoxElement = async (req, res) => {
         }
         console.log("Found parent box:", box.name);
 
+        let finalIsFront;
+        if (typeof isFrontElementFromBody === 'boolean') {
+            finalIsFront = isFrontElementFromBody; // Body value takes precedence
+            console.log(`Using isFrontElement from BODY: ${finalIsFront}`);
+        } else {
+            finalIsFront = face.toLowerCase() === 'front'; // Fallback to query param logic
+            console.log(`Using isFrontElement from QUERY param ('${face}'): ${finalIsFront}`);
+        }
+
         // 2. Create the new Element document for the Box
         const newElementData = {
             // cardId: null, // Explicitly null as this element belongs to a Box
             boxId: box._id, // Link to this box
             userId: box.userId, // Inherit userId
-            isFrontElement: face === 'front', // Could be for box front/back
+            isFrontElement: finalIsFront, // Could be for box front/back
             type,
             ...elementProps
         };
