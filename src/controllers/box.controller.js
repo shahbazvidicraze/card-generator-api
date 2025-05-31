@@ -279,11 +279,40 @@ exports.createBox = async (req, res) => {
 };
 
 exports.getUserBoxes = async (req, res) => {
+    console.log("BOX_CONTROLLER: getUserBoxes called.");
     try {
         const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
-        const boxes = await Box.find({ userId }).sort({ updatedAt: -1 });
-         successResponse(res, "User boxes retrieved successfully.", boxes);
+
+        const boxesFromDB = await Box.find({ userId })
+            .populate('boxFrontElementIds') // Populate the box's own front elements
+            .populate('boxBackElementIds')   // Populate the box's own back elements
+            .sort({ updatedAt: -1 })
+            .lean(); // Use lean for performance
+
+        // Now, boxesFromDB contains plain JS objects where boxFrontElementIds (if populated)
+        // holds an array of Element objects, and same for boxBackElementIds.
+        // We need to transform this to match the desired output structure with both *_Ids and *_Elements.
+        const boxesForResponse = boxesFromDB.map(box => {
+            const responseBox = { ...box }; // Copy all existing properties
+
+            // Create the populated element arrays
+            responseBox.boxFrontElements = box.boxFrontElementIds || []; // Populated array
+            responseBox.boxBackElements = box.boxBackElementIds || [];   // Populated array
+
+            // Re-create the ID-only arrays from the populated objects (if they exist)
+            responseBox.boxFrontElementIds = (box.boxFrontElementIds || []).map(element => element._id);
+            responseBox.boxBackElementIds = (box.boxBackElementIds || []).map(element => element._id);
+            
+            // Explicitly exclude cards from this list view, unless you decide otherwise
+            // delete responseBox.cards; // If .lean() somehow included it or if you add card population later
+
+            return responseBox;
+        });
+
+        successResponse(res, "User boxes retrieved successfully.", boxesForResponse);
+
     } catch (error) {
+        console.error("Error in getUserBoxes Controller:", error.message, error.stack);
         errorResponse(res, "Failed to retrieve user boxes.", 500, "FETCH_BOXES_FAILED", error.message);
     }
 };
