@@ -1,11 +1,14 @@
 // src/models/Element.model.js
 const mongoose = require('mongoose');
+const { v4: uuidv4 } = require('uuid'); // If you are using this for a custom ID
 
 const ElementSchemaDef = {
-    cardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Card', index: true },
+    elementId: { type: String, default: uuidv4 }, // Custom ID, Mongoose _id is still primary key
+    cardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Card', index: true, default: null }, // Null if a box element
     boxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Box', required: true, index: true },
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // Assuming User model
-    isFrontElement: { type: Boolean, required: true, default: true },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false, index: true },
+    isGuestElement: { type: Boolean, default: true },
+    isFrontElement: { type: Boolean, required: true, default: true }, // true for front, false for back
     type: { type: String, enum: ['image', 'text', 'shape'], required: true },
     x: { type: Number, default: 0 },
     y: { type: Number, default: 0 },
@@ -22,10 +25,10 @@ const ElementSchemaDef = {
     textAlign: { type: String, enum: ['left', 'center', 'right', 'justify'], default: 'left' },
     fontWeight: { type: String, default: 'normal' },
     fontStyle: { type: String, default: 'normal' },
-    lineHeight: { type: String, default: 'normal' },
-    letterSpacing: { type: String, default: 'normal' },
-    textDecoration: { type: String, default: 'none' },
-    shapeType: { type: String, enum: ['rectangle', 'circle', 'triangle'] },
+    lineHeight: { type: String, default: 'normal'},
+    letterSpacing: {type: String, default: 'normal'},
+    textDecoration: {type: String, default: 'none'},
+    shapeType: { type: String, enum: ['rectangle', 'circle', 'triangle'] }, // if you have 'shape' type
     fillColor: { type: String, default: '#cccccc' },
     strokeColor: { type: String, default: '#000000' },
     strokeWidth: { type: Number, default: 1 },
@@ -34,5 +37,4 @@ const ElementSchemaDef = {
 
 const ElementSchema = new mongoose.Schema(ElementSchemaDef, { timestamps: true });
 
-// Check if the model already exists to prevent OverwriteModelError during hot-reloading
 module.exports = mongoose.models.Element || mongoose.model('Element', ElementSchema);

@@ -2,38 +2,63 @@
 const express = require('express');
 const router = express.Router();
 const cardController = require('../controllers/card.controller');
-// const authMiddleware = require('../middleware/auth.middleware');
+const authMiddleware = require('../middleware/auth.middleware'); // Make sure this is correctly imported
 
 // --- Card Routes (often nested under or related to a Box) ---
 
-// Get all cards for a specific box (could also be part of getBoxById with populate)
-router.get('/box/:boxId', /* authMiddleware.protect, */ cardController.getCardsByBox); // LINE X
+// Get all cards for a specific box
+// LINE X: This should be public like getBoxById. The controller (getCardsByBox)
+//         will need to check if the box is guest or, if owned, if the current user (if any) has access.
+router.get('/box/:boxId', cardController.getCardsByBox);
 
 // Get a single card by its ID
-router.get('/:cardId', /* authMiddleware.protect, */ cardController.getCardById); // LINE Y
+// LINE Y: Public for the same reasons as getBoxById and getCardsByBox.
+//         Controller (getCardById) needs to handle guest/owned access.
+router.get('/:cardId', cardController.getCardById);
 
 // Create a new blank card within an existing box (user designs it manually)
-router.post('/box/:boxId', /* authMiddleware.protect, */ cardController.createCardInBox); // LINE Z
+// LINE Z: Public. The controller (createCardInBox) will check if the parent box
+//         is guest or owned, and assign userId/isGuestCard accordingly. It can
+//         also optionally check for an auth token to associate directly if user is logged in.
+router.post('/box/:boxId', cardController.createCardInBox);
 
 // Update card details (name, orderInBox) - elements are handled separately
-router.put('/:cardId', /* authMiddleware.protect, */ cardController.updateCardDetails); // LINE A
+// LINE A: Protected. Modifying card details should require ownership.
+router.put('/:cardId', authMiddleware.protect, cardController.updateCardDetails);
 
 // Delete a card
-router.delete('/:cardId', /* authMiddleware.protect, */ cardController.deleteCard); // LINE B
+// LINE B: Protected. Deleting a card (and its elements) should require ownership.
+router.delete('/:cardId', authMiddleware.protect, cardController.deleteCard);
 
 // --- Routes for Card Elements ---
 // Add an element to a card's front or back
 // query param: ?face=front or ?face=back
-router.post('/:cardId/elements', /* authMiddleware.protect, */ cardController.addCardElement); // LINE C
+// LINE C: Public (for guest cards). The controller (addCardElement) will check
+//         if the parent card is guest or owned, and assign userId/isGuestElement.
+//         If the card is owned, it implicitly requires the user to be the owner (checked via card's userId).
+//         Alternatively, to be stricter, you could protect this, and only allow adding elements to
+//         cards that have been "claimed" or created by a logged-in user.
+//         For the "create as guest" model, this should allow adding elements to guest cards.
+router.post('/:cardId/elements', cardController.addCardElement); // Controller handles ownership/guest status of parent card
 
 // Update an existing element on a card's front or back
-router.put('/:cardId/elements/:elementId', /* authMiddleware.protect, */ cardController.updateCardElement); // LINE D
+// LINE D: Protected. Modifying an element should require ownership of the element (and thus its card/box).
+//         The controller (updateCardElement) should verify element.userId.
+router.put('/elements/:elementId', authMiddleware.protect, cardController.updateCardElement);
+// Note: The route is /elements/:elementId which is fine if elementId is globally unique.
+// If you want to scope it to a card (e.g. /cards/:cardId/elements/:elementId), adjust accordingly,
+// though direct update via elementId with ownership check is also common. My controller assumed /elements/:elementId
 
 // Delete an element from a card's front or back
-router.delete('/:cardId/elements/:elementId', /* authMiddleware.protect, */ cardController.deleteCardElement); // LINE E  <-- This is likely around line 37
+// LINE E: Protected. Deleting an element should require ownership.
+router.delete('/:cardId/elements/:elementId', authMiddleware.protect, cardController.deleteCardElement);
 
-// AI Text Generation for a specific card field (if not part of initial deck gen)
-// This might be better as a utility route, but for context here:
-router.post('/:cardId/generate-text-field', /* authMiddleware.protect, */ cardController.generateTextForCard); // LINE F
+// AI Text Generation for a specific card field
+// LINE F: This depends on the nature of the action.
+//         If it modifies the card's content, it should likely be PROTECTED.
+//         If it's just fetching text suggestions that the user can then choose to apply (via a separate update),
+//         it could be public. Given it's "for a specific card field", implying it might update data,
+//         protecting it is safer.
+router.post('/:cardId/generate-text-field', authMiddleware.protect, cardController.generateTextForCard);
 
 module.exports = router;

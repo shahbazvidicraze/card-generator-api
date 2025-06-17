@@ -143,9 +143,10 @@
             transform: rotateY(180deg);
         }
 
-        #cardPreviewContainer.flipped #cardBack{
+        #cardPreviewContainer.flipped #cardBack {
             z-index: 10;
         }
+
         .card-face {
             /* Common for front and back */
             position: absolute;
@@ -210,13 +211,13 @@
             border-radius: 3px;
         }
 
-        /* Thumbnail Styling */
         #deckThumbnailsContainer {
-            display: flex;
-            flex-wrap: nowrap;
-            overflow-x: auto;
-            padding: 10px 0;
-            justify-content: flex-start;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+            /* Adjust 150px as needed */
+            gap: 100px 45px;
+            padding: 10px;
+            margin: 40px 0;
         }
 
         .card-preview-thumbnail-wrapper {
@@ -240,18 +241,6 @@
             margin: 0;
             width: 70px;
             height: 98px;
-        }
-
-        #deckThumbnailsContainer {
-            display: flex;
-            /* Use flexbox for horizontal layout */
-            flex-wrap: nowrap;
-            /* Prevent wrapping to new line by default */
-            overflow-x: auto;
-            /* Allow horizontal scrolling if many thumbs */
-            padding: 10px 0;
-            justify-content: center;
-            /* Align thumbs to the start */
         }
 
         .card-preview-thumbnail-wrapper {
@@ -344,7 +333,8 @@
                     <form id="cardGenerationForm">
                         <div class="form-group">
                             <label for="boxName">Deck/Box Name</label>
-                            <input type="text" class="form-control" id="boxName" placeholder="e.g., My Awesome Math Deck" value="My New Card Deck">
+                            <input type="text" class="form-control" id="boxName"
+                                placeholder="e.g., My Awesome Math Deck" value="My New Card Deck">
                         </div>
                         <!-- AI Prompt -->
                         <div class="form-group">
@@ -381,10 +371,10 @@
                             <label for="numCardsInDeck">How many Cards per Deck</label>
                             <select class="custom-select" id="numCardsInDeck">
                                 <option value="1">1</option>
-                                <option value="5" selected>5</option>
+                                <option value="5">5</option>
                                 <option value="10">10</option>
                                 <option value="20">20</option>
-                                <option value="30">30</option>
+                                <option value="30" selected>30</option>
                             </select>
                         </div>
                         <!-- Theme Selector -->
@@ -494,7 +484,7 @@
 
         let uploadedImageBase64 = null;     // For custom FRONT theme
         let currentSelectedThemeSrc = null; // For card FRONT (predefined src or uploadedImageBase64)
-        
+
         let uploadedCardBackBase64 = null;  // For custom uploaded CARD BACK
         let currentSelectedCardBackSrc = null; // For card BACK (predefined back src or uploadedCardBackBase64)
 
@@ -504,7 +494,7 @@
             themeSrcSelectedAtGeneration: null
         };
         const DEFAULT_FRONTEND_PLACEHOLDER_URL = "https://via.placeholder.com/150x200.png?text=No+Theme";
-        
+
         const DEFAULT_CARD_BACK_PLACEHOLDER_TEXT = "";
         let uploadedCardBackImageBase64 = null; // For a custom uploaded back image
         let isCardFlipped = false; // Tracks the state of the main card preview;
@@ -624,8 +614,8 @@
                 $(this).val('');
             });
 
-             // --- Event Handlers for CARD BACK Selection & Upload ---
-            $cardBackThemeSelectorContainer.on('click', 'img, .upload-theme-option', function() {
+            // --- Event Handlers for CARD BACK Selection & Upload ---
+            $cardBackThemeSelectorContainer.on('click', 'img, .upload-theme-option', function () {
                 const $clickedElement = $(this);
                 $cardBackThemeSelectorContainer.find('img, .upload-theme-option').removeClass('selected');
                 $clickedElement.addClass('selected');
@@ -647,11 +637,11 @@
                 updateMainCardBackDisplay();
             });
 
-            $('#customCardBackUpload').on('change', function(event) { // This is for CARD BACK UPLOAD
+            $('#customCardBackUpload').on('change', function (event) { // This is for CARD BACK UPLOAD
                 const file = event.target.files[0];
                 if (file) {
                     const reader = new FileReader();
-                    reader.onload = function(e) {
+                    reader.onload = function (e) {
                         uploadedCardBackBase64 = e.target.result;
                         currentSelectedCardBackSrc = uploadedCardBackBase64;
 
@@ -660,7 +650,7 @@
                             .attr('src', uploadedCardBackBase64).attr('alt', 'Uploaded Card Back')
                             .addClass('uploaded-back-theme-preview selected') // Add selected class
                             .data('theme-src', uploadedCardBackBase64).data('is-uploaded-back-preview', true);
-                        
+
                         $uploadCardBackBtn.before($uploadedImgPreview);
                         $cardBackThemeSelectorContainer.find('img[data-is-predefined-back], #uploadCardBackBtn').removeClass('selected');
                         $uploadedImgPreview.addClass('selected'); // Select the new one
@@ -673,7 +663,7 @@
             });
 
             // --- Flip Card Logic ---
-            $('#flipCardBtn').on('click', function() {
+            $('#flipCardBtn').on('click', function () {
                 const $preview = $('#cardPreviewContainer');
                 $preview.toggleClass('flipped');
                 $(this).text($preview.hasClass('flipped') ? 'Flip to Front' : 'Flip to Back');
@@ -724,14 +714,14 @@
 
             $('#cardGenerationForm').on('submit', async function (e) {
                 e.preventDefault();
-                 const $generateButton = $('#generateCardButton');
+                const $generateButton = $('#generateCardButton');
                 $generateButton.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Generating...');
                 $('#errorMessage').hide().text('');
                 $('#cardFront').empty(); // Clear only front face initially
                 $('#cardBack').css('background-image', 'none').html(`<span>${DEFAULT_CARD_BACK_PLACEHOLDER_TEXT}</span>`);
-                $('#deckThumbnailsContainer').empty(); 
+                $('#deckThumbnailsContainer').empty();
                 $('#deckThumbnailsContainerWrapper').hide().find('h6').hide();
-                $('#flipCardBtn').hide(); 
+                $('#flipCardBtn').hide();
 
 
                 const aiPromptText = $('#aiPrompt').val();
@@ -765,7 +755,7 @@
 
                 let fullUserPromptForAI = aiPromptText; // Base for AI content generation
                 if (genre && genre.toLowerCase() !== "none" && genre !== "") { fullUserPromptForAI += `, ${genre} genre`; }
-                
+
                 // Image generation prompt construction is now more nuanced
                 // It combines the main content prompt with the selected front theme's specific prompt
                 let imageGenerationUserPrompt = aiPromptText; // Start with main content
@@ -785,7 +775,7 @@
                 if (currentSelectedCardBackSrc) {
                     cardBackImageForPayload = await imageUrlToBase64(currentSelectedCardBackSrc);
                 }
-                
+
                 const payload = {
                     boxName: boxName,
                     userPrompt: imageGenerationUserPrompt, // This is now more styled for the image AI
@@ -794,12 +784,12 @@
                     accentColorPrompt: colorPrompt, // Send for metadata/AI
                     accentColorHex: actualTextColor, // For text elements (backend also uses this)
 
-                    defaultCardWidthPx: cardWidth, 
+                    defaultCardWidthPx: cardWidth,
                     defaultCardHeightPx: cardHeight,
                     // imageAspectRatioForDeck: ..., // Let backend calculate or add UI for this
-                    imageOutputFormatForDeck: "png", 
+                    imageOutputFormatForDeck: "png",
                     numCardsInDeck: numCards,
-                    
+
                     cardBackImageDataUri: cardBackImageForPayload, // Base64 of selected/uploaded back
                     fallbackFrontImageBase64DataUri: fallbackFrontImageBase64 // Base64 of selected/uploaded front theme
                 };
@@ -815,17 +805,17 @@
 
                     // if (response.ok && backendResponseData.box && backendResponseData.cards && backendResponseData.cards.length > 0) {
                     if (response.ok) {
-                        console.log("Box and Deck received:", backendResponseData);
+                        console.log("Box and Deck received:", backendResponseData.data);
                         $('#loadingIndicator').hide();
                         $generateButton.prop('disabled', false).text('Create Card Design');
                         dataCache.currentBox = backendResponseData.data.box;
-                        dataCache.currentDeck = JSON.parse(JSON.stringify(backendResponseData.cards)); // Store pristine deck
-                        dataCache.imageWasAIgeneratedForDeck = backendResponseData.imageWasAIgenerated; // For the deck's front image
-                        dataCache.originalCardWidth = cardWidth; 
+                        dataCache.currentDeck = JSON.parse(JSON.stringify(backendResponseData.data.box.cards)); // Store pristine deck
+                        dataCache.imageWasAIgeneratedForDeck = backendResponseData.data.imageWasAIgenerated; // For the deck's front image
+                        dataCache.originalCardWidth = cardWidth;
                         dataCache.originalCardHeight = cardHeight;
                         // themeSrcSelectedAtGeneration is for the FRONT image fallback scenario handled by backend now
                         // but we can still store what was selected on frontend for consistency checks if needed
-                        dataCache.themeSrcSelectedAtGeneration = currentSelectedThemeSrc; 
+                        dataCache.themeSrcSelectedAtGeneration = currentSelectedThemeSrc;
 
 
                         // The backend now handles which image (AI or fallback) is in card.cardFrontElements[0].imageUrl
@@ -835,7 +825,7 @@
                         if (cardsToDisplay.length > 0) {
                             displayMainCard(cardsToDisplay[0]); // Display the first card
                             const $thumbnailsContainer = $('#deckThumbnailsContainer');
-                            $thumbnailsContainer.empty(); 
+                            $thumbnailsContainer.empty();
                             $('#deckThumbnailsContainerWrapper').show().find('h6').show();
                             cardsToDisplay.forEach((cardInst, idx) => {
                                 renderThumbnail(cardInst, dataCache.originalCardWidth, dataCache.originalCardHeight, idx, $thumbnailsContainer, cardsToDisplay);
@@ -864,7 +854,7 @@
                 } else if (currentSelectedCardBackSrc) { // Fallback to globally selected/uploaded back
                     backImageUrlToUse = currentSelectedCardBackSrc;
                 }
-                
+
                 if (backImageUrlToUse) {
                     $('#cardBack').css('background-image', `url(${backImageUrlToUse})`).html('');
                 } else {
@@ -880,11 +870,11 @@
 
                 // Render the FRONT face using the card's elements
                 renderCardFace(cardData, dataCache.originalCardWidth, dataCache.originalCardHeight, $('#cardFront'), false);
-                
+
                 // Set the card BACK image using cardBackImageUrl from the cardData object
-                let cardBackDisplayUrl = cardData.cardBackImageUrl || currentSelectedCardBackSrc || DEFAULT_FRONTEND_PLACEHOLDER_URL.replace("Theme","Card Back");
+                let cardBackDisplayUrl = cardData.cardBackImageUrl || currentSelectedCardBackSrc || DEFAULT_FRONTEND_PLACEHOLDER_URL.replace("Theme", "Card Back");
                 $('#cardBack').css('background-image', `url(${cardBackDisplayUrl})`).html(cardBackDisplayUrl && (cardBackDisplayUrl.startsWith('http') || cardBackDisplayUrl.startsWith('data:')) ? '' : `<span>${DEFAULT_CARD_BACK_PLACEHOLDER_TEXT}</span>`);
-                
+
                 $('#cardPreviewContainer').removeClass('flipped');
                 $('#flipCardBtn').text('Flip to Back').show();
             }
@@ -904,11 +894,11 @@
                 // If isThumbnailContent is true, $faceContainer is the thumbnail's content div.
                 // Its width/height should be 100% of its wrapper.
                 // The wrapper (.card-preview-thumbnail-wrapper) should have a fixed pixel size set by CSS.
-                if (!isThumbnailContent) { 
-                     $faceContainer.css({
+                if (!isThumbnailContent) {
+                    $faceContainer.css({
                         backgroundColor: cardData.metadata?.backgroundColor || '#fff',
                     });
-                } else { 
+                } else {
                     $faceContainer.css({ // Styles for thumbnail content div
                         backgroundColor: cardData.metadata?.backgroundColor || '#fff',
                         width: '100%', height: '100%' // Fill wrapper
@@ -940,7 +930,7 @@
                     // The #cardFront (which is $faceContainer here) is already sized correctly relative to #cardPreviewContainer
                     // by CSS (width: 100%, height: 100%) and #cardPreviewContainer is sized by updatePreviewContainerDimensions
                 }
-                 // Common styles for the face itself
+                // Common styles for the face itself
                 $faceContainer.css({
                     backgroundColor: cardData.metadata?.backgroundColor || '#fff',
                     position: 'relative', // For absolute positioning of elements within
@@ -959,7 +949,7 @@
                     $faceContainer.html(`<p style="text-align:center; padding-top:10px; font-size:0.8em; color:#888;">${placeholderText}</p>`);
                 }
             }
-            
+
 
             function renderThumbnail(cardData, originalCardWidth, originalCardHeight, index, $deckThumbsContainer, fullDeckContext) {
                 const $thumbWrapper = $('<div></div>')
@@ -971,18 +961,18 @@
                 $thumbWrapper.append($thumbFrontFace);
                 $deckThumbsContainer.append($thumbWrapper);
 
-                $thumbWrapper.css({ width: '76px', height: '104px' }); // Size of the clickable wrapper
+                $thumbWrapper.css({ width: '76px', height: '104px', scale:'2' }); // Size of the clickable wrapper
 
                 // Thumbnails always show the cardFrontElements
                 renderCardFace(cardData, originalCardWidth, originalCardHeight, $thumbFrontFace, true, fullDeckContext, 'front');
 
-                $thumbWrapper.off('click').on('click', function() { 
+                $thumbWrapper.off('click').on('click', function () {
                     const clickedIndex = $(this).data('card-index');
                     // THE VARIABLE `cardToDisplayFromDeck` IS USED HERE, BUT IT'S THE NAME OF A VARIABLE
                     // FROM A PREVIOUS VERSION OF THE SUBMIT HANDLER'S MAP FUNCTION.
                     // WE NEED TO USE `fullDeckContext` WHICH IS PASSED INTO `renderThumbnail`.
                     const cardDataForMainDisplay = fullDeckContext[clickedIndex]; // <<<< USE fullDeckContext
-                    
+
                     if (!cardDataForMainDisplay) { // Check if the card data exists
                         console.error("Thumbnail click: Card data not found in fullDeckContext for index", clickedIndex);
                         return;
@@ -990,7 +980,7 @@
 
                     // Clone the specific card data from the deck for modification
                     let cardToProcessForMainView = JSON.parse(JSON.stringify(cardDataForMainDisplay));
-                    
+
                     const imageUsagePrefOnClick = $('#imageUsagePreference').val();
                     const aiSucceededOnClick = dataCache.imageWasAIgenerated; // Use cached status from initial generation
                     const themeSrcForFallbackOnClick = dataCache.themeSrcSelectedAtGeneration; // Use theme selected at initial generation
@@ -999,33 +989,33 @@
                     if (imageUsagePrefOnClick === 'selected_theme_only') {
                         finalImageForMainDisplay = themeSrcForFallbackOnClick || DEFAULT_FRONTEND_PLACEHOLDER_URL;
                     } else if (imageUsagePrefOnClick === 'ai_then_selected_theme') {
-                        finalImageForMainDisplay = aiSucceededOnClick ? 
-                            cardToProcessForMainView.elements.find(el=>el.type==='image' && el.zIndex===0)?.imageUrl : 
+                        finalImageForMainDisplay = aiSucceededOnClick ?
+                            cardToProcessForMainView.elements.find(el => el.type === 'image' && el.zIndex === 0)?.imageUrl :
                             (themeSrcForFallbackOnClick || DEFAULT_FRONTEND_PLACEHOLDER_URL);
                     } else { // ai_only_white_fallback
-                         finalImageForMainDisplay = cardToProcessForMainView.elements.find(el=>el.type==='image' && el.zIndex===0)?.imageUrl;
-                         // If backend's placeholder was empty string and AI failed, use a frontend default
-                         if (!finalImageForMainDisplay && !aiSucceededOnClick) {
+                        finalImageForMainDisplay = cardToProcessForMainView.elements.find(el => el.type === 'image' && el.zIndex === 0)?.imageUrl;
+                        // If backend's placeholder was empty string and AI failed, use a frontend default
+                        if (!finalImageForMainDisplay && !aiSucceededOnClick) {
                             finalImageForMainDisplay = DEFAULT_FRONTEND_PLACEHOLDER_URL;
-                         }
+                        }
                     }
                     // Ultimate safety net
                     if (!finalImageForMainDisplay) finalImageForMainDisplay = DEFAULT_FRONTEND_PLACEHOLDER_URL;
-                    
+
                     if (!cardToProcessForMainView.elements) cardToProcessForMainView.elements = [];
                     let imageElement = cardToProcessForMainView.elements.find(el => el.type === 'image' && el.zIndex === 0);
-                    if(imageElement) {
+                    if (imageElement) {
                         imageElement.imageUrl = finalImageForMainDisplay;
-                    } else { 
+                    } else {
                         cardToProcessForMainView.elements.unshift({
                             elementId: 'mainfb-' + Date.now(), type: 'image', imageUrl: finalImageForMainDisplay,
-                            x:0, y:0, width: cardToProcessForMainView.widthPx, height: cardToProcessForMainView.heightPx,
-                            zIndex:0, rotation:0
+                            x: 0, y: 0, width: cardToProcessForMainView.widthPx, height: cardToProcessForMainView.heightPx,
+                            zIndex: 0, rotation: 0
                         });
-                        cardToProcessForMainView.elements.sort((a,b)=>(a.zIndex||0)-(b.zIndex||0));
+                        cardToProcessForMainView.elements.sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
                     }
 
-                     renderCardFace(cardToProcessForMainView, dataCache.originalCardWidth, dataCache.originalCardHeight, $('#cardFront'), false, fullDeckContext);
+                    renderCardFace(cardToProcessForMainView, dataCache.originalCardWidth, dataCache.originalCardHeight, $('#cardFront'), false, fullDeckContext);
                     // Update card back for the main preview
                     if (uploadedCardBackBase64) {
                         $('#cardBack').css('background-image', `url(${uploadedCardBackBase64})`).html('');
@@ -1035,7 +1025,7 @@
                     $('#cardPreviewContainer').removeClass('flipped'); // Show front
 
                     displayMainCard(cardToProcessForMainView, fullDeckContext); // Pass fullDeckContext again if displayMainCard uses it
-                    
+
                     $('#deckThumbnailsContainer .card-preview-thumbnail-wrapper').removeClass('selected-thumb');
                     $(this).addClass('selected-thumb');
                 });
@@ -1069,7 +1059,7 @@
                         // More nuanced font scaling for thumbnails vs main card
                         let scaledFontSize;
                         if (isThumbnailFlag) {
-                            scaledFontSize = Math.max(6, originalFontSize * fontScale * 0.8); // Smaller for thumbs
+                            scaledFontSize = Math.max(6, originalFontSize * fontScale * 0.5); // Smaller for thumbs
                         } else {
                             scaledFontSize = Math.max(10, originalFontSize * fontScale);
                         }
@@ -1092,8 +1082,8 @@
 
             // Initializations
             if (PREDEFINED_THEMES.length > 0 && !currentSelectedThemeSrc) { currentSelectedThemeSrc = PREDEFINED_THEMES[0].src; }
-            if (PREDEFINED_BACK_THEMES.length > 0 && !currentSelectedCardBackSrc) { 
-                currentSelectedCardBackSrc = PREDEFINED_BACK_THEMES[0].src; 
+            if (PREDEFINED_BACK_THEMES.length > 0 && !currentSelectedCardBackSrc) {
+                currentSelectedCardBackSrc = PREDEFINED_BACK_THEMES[0].src;
                 $('#cardBackThemeSelectorContainer img[data-is-predefined-back]').first().addClass('selected');
             }
             updatePreviewContainerDimensions();

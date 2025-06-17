@@ -5,6 +5,8 @@ const Element = require('../models/Element.model');
 const aiService = require('../services/ai.service');
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
+const jwt = require('jsonwebtoken'); // For optional token check
+const User = require('../models/User.model'); // For optional token check
 
 // --- Constants (can be moved to a config file) ---
 const CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION = `
@@ -68,7 +70,36 @@ exports.generateNewDeckAndBox = async (req, res) => {
             fallbackFrontImageBase64DataUri = null
         } = req.body;
 
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
+        let userId = null;
+        let isGuest = true;
+
+        // Optional: Check for an auth token even if route isn't protected
+        // This allows logged-in users to have their creations immediately associated.
+        // This part requires a "soft" auth check middleware or direct token verification here.
+        // For simplicity, let's assume for now: if no token, it's a guest.
+        // If you send a token, you'd need to verify it here (similar to 'protect' but not failing if no token).
+
+        // Let's assume for now: if req.user exists (e.g. if you make 'protect' middleware optional)
+        if (req.user && req.user.id) { // req.user would be set by a modified/optional protect middleware
+            userId = req.user.id;
+            isGuest = false;
+        }
+        // OR, if you want to handle the token explicitly in this controller:
+        let token;
+        if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+            token = req.headers.authorization.split(' ')[1];
+            try {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                const user = await User.findById(decoded.id);
+                if (user) {
+                    userId = user._id;
+                    isGuest = false;
+                }
+            } catch (err) {
+                // Token invalid or expired, proceed as guest
+                console.log('Optional token check failed, proceeding as guest:', err.message);
+            }
+        }
 
         if (typeof boxName !== 'string' || boxName.trim() === '') {
             return res.status(400).json({ success: false, message: "Box name is required and must be a valid string." });
@@ -99,7 +130,7 @@ exports.generateNewDeckAndBox = async (req, res) => {
         };
         
         const imageGenPromptForStability = userPrompt; // Assuming frontend combines style prompts into userPrompt
-        const textListPromptForGemini = `User Request: Generate ${numCardsInDeck} distinct, concise data items ... related to "${userPrompt}"...\n\nData Items List:`;
+        const textListPromptForGemini = `User Request: Generate ${numCardsInDeck} unique, concise but complete data items, max 100 characters long each item... related to "${userPrompt}"...\n\nData Items List: (never include headings, descriptions, only provide single line per item.)`;
 
         // --- 2. Call AI Services ---
         let aiFrontImageDataUri, generatedTextListData;
@@ -144,6 +175,7 @@ exports.generateNewDeckAndBox = async (req, res) => {
         // --- 4. Create Box Document (without cards initially) ---
         const newBoxData = {
             name: boxName.trim(), description: boxDescription, userId,
+            isGuestBox: isGuest,
             defaultCardWidthPx, defaultCardHeightPx, aiSettingsForThisBox
         };
         const newBox = new Box(newBoxData);
@@ -166,7 +198,7 @@ exports.generateNewDeckAndBox = async (req, res) => {
             const cardFrontElementDocsData = [];
             // Front Image Element Data
             const frontImageElementData = {
-                cardId: tempCardId, boxId: savedBox._id, userId: savedBox.userId, isFrontElement: true,
+                cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: savedBox.userId, isFrontElement: true,
                 type: 'image', imageUrl: finalFrontImageToUse,
                 x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx, zIndex: 0, rotation: 0
             };
@@ -180,13 +212,13 @@ exports.generateNewDeckAndBox = async (req, res) => {
             const textBlockWidth = Math.round(defaultCardWidthPx * 0.8);
             const textBlockHeight = Math.round(defaultCardHeightPx * 0.45);
             cardFrontElements.push({
-                elementId: uuidv4(), type: 'text', content: textContentForCard,
+                elementId: uuidv4(), type: 'text', content: textContentForCard, isGuestElement: isGuest,
                 x: textBlockX, y: textBlockY, width: textBlockWidth, height: textBlockHeight,
                 fontSize: "22px", fontFamily: "Arial", color: accentColorHex,
                 textAlign: "center", zIndex: 1, rotation: 0
             });
             const frontTextElementData = {
-                cardId: tempCardId, boxId: savedBox._id, userId: savedBox.userId, isFrontElement: true,
+                cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: savedBox.userId, isFrontElement: true,
                 type: 'text', content: individualCardText, /* ...other text props... */
                 x: textBlockX, y: textBlockY, width: textBlockWidth, height: textBlockHeight,
                 fontSize: "22px", fontFamily: "Arial", color: accentColorHex, textAlign: "center", zIndex: 1
@@ -197,7 +229,7 @@ exports.generateNewDeckAndBox = async (req, res) => {
             const cardBackElementDocsData = [];
             if (cardBackImageDataUri) {
                 cardBackElementDocsData.push({
-                    cardId: tempCardId, boxId: savedBox._id, userId: savedBox.userId, isFrontElement: false, // Mark as back
+                    cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: savedBox.userId, isFrontElement: false, // Mark as back
                     type: 'image', imageUrl: cardBackImageDataUri,
                     x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx, zIndex: 0, rotation: 0
                 });
@@ -217,7 +249,7 @@ exports.generateNewDeckAndBox = async (req, res) => {
             const cardToSave = new Card({
                 _id: tempCardId, // Use the pre-generated ID
                 name: `${savedBox.name} - Card ${i + 1}`,
-                boxId: savedBox._id, userId: savedBox.userId, orderInBox: i,
+                boxId: savedBox._id, userId: savedBox.userId,isGuestCard: isGuest, orderInBox: i,
                 widthPx: defaultCardWidthPx, heightPx: defaultCardHeightPx,
                 cardFrontElementIds: savedFrontElements.map(el => el._id), // Store IDs
                 cardBackElementIds: savedBackElements.map(el => el._id),   // Store IDs
@@ -246,7 +278,8 @@ exports.generateNewDeckAndBox = async (req, res) => {
         const responseData = {
             box: boxResponseObject, // The primary data is the box with its cards
             imageWasAIgenerated: aiFrontImageGeneratedSuccessfully,
-            textListWasGenerated: textListGeneratedSuccessfully
+            textListWasGenerated: textListGeneratedSuccessfully,
+            rawText: generatedTextListData
         };
         
         successResponse(res, `Box "${savedBox.name}" and ${generatedCardsDataForResponse.length} cards created.`, responseData, 201);
@@ -258,62 +291,173 @@ exports.generateNewDeckAndBox = async (req, res) => {
     console.log("CONTROLLER: generateNewDeckAndBox finished.");
 };
 
+exports.claimBox = async (req, res) => {
+    const { boxId } = req.params;
+    const userId = req.user.id; // From protect middleware
+
+    try {
+        const box = await Box.findById(boxId);
+        if (!box) return errorResponse(res, 'Box not found.', 404, "BOX_NOT_FOUND");
+        if (box.userId && box.userId.toString() !== userId.toString()) {
+            return errorResponse(res, 'This box is already owned by another user.', 403, "BOX_OWNED_BY_OTHER");
+        }
+        if (box.userId && !box.isGuestBox) {
+             return successResponse(res, 'Box already associated with your account.', {box});
+        }
+
+        box.userId = userId;
+        box.isGuestBox = false;
+        await box.save();
+
+        const cardsInBox = await Card.find({ boxId: box._id });
+        const cardIds = cardsInBox.map(c => c._id);
+
+        await Card.updateMany(
+            { _id: { $in: cardIds }, isGuestCard: true },
+            { $set: { userId: userId, isGuestCard: false } }
+        );
+        await Element.updateMany(
+            { boxId: box._id, isGuestElement: true }, // Elements directly on box OR on cards in this box
+            { $set: { userId: userId, isGuestElement: false } }
+        );
+        
+        // Refetch data to return fully populated and updated structures
+        const updatedBox = await Box.findById(boxId).populate('boxFrontElementIds').populate('boxBackElementIds').lean();
+        const updatedCards = await Card.find({ boxId: boxId }).populate('cardFrontElementIds').populate('cardBackElementIds').lean();
+        
+        const populatedCards = updatedCards.map(card => ({
+            ...card,
+            cardFrontElements: card.cardFrontElementIds || [],
+            cardBackElements: card.cardBackElementIds || [],
+            cardFrontElementIds: (card.cardFrontElementIds || []).map(el => el._id),
+            cardBackElementIds: (card.cardBackElementIds || []).map(el => el._id)
+        }));
+        const populatedBox = {
+            ...updatedBox,
+            boxFrontElements: updatedBox.boxFrontElementIds || [],
+            boxBackElements: updatedBox.boxBackElementIds || [],
+            boxFrontElementIds: (updatedBox.boxFrontElementIds || []).map(el => el._id),
+            boxBackElementIds: (updatedBox.boxBackElementIds || []).map(el => el._id)
+        };
+
+        successResponse(res, 'Box, cards, and elements successfully claimed.', { box: populatedBox, cards: populatedCards });
+    } catch (error) {
+        errorResponse(res, 'Server error while claiming box.', 500, "CLAIM_BOX_FAILED", error.message);
+    }
+};
+
+
 exports.createBox = async (req, res) => {
     try {
         const { name, description, defaultCardWidthPx, defaultCardHeightPx } = req.body;
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
-        if (!name) return res.status(400).json({ success: false, message: "Box name is required." });
+        let userId = null;
+        let isGuest = true;
+        if (req.user && req.user.id) { userId = req.user.id; isGuest = false; }
+
+        if (!name) return errorResponse(res, "Box name is required.", 400);
 
         const newBox = new Box({
-            name, description, userId,
+            name, description, userId, isGuestBox: isGuest,
             defaultCardWidthPx, defaultCardHeightPx
         });
         const savedBox = await newBox.save();
         successResponse(res, "Box created successfully.", savedBox, 201);
     } catch (error) {
-        if (error.name === 'ValidationError') {
-            return errorResponse(res, "Validation failed.", 400, "VALIDATION_ERROR", error.errors);
-        }
         errorResponse(res, "Failed to create box.", 500, "BOX_CREATION_FAILED", error.message);
     }
 };
 
 exports.getUserBoxes = async (req, res) => {
-    console.log("BOX_CONTROLLER: getUserBoxes called.");
     try {
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder
+        if (!req.user || !req.user.id) return errorResponse(res, "User not authenticated.", 401);
+        const userId = req.user.id;
 
-        const boxesFromDB = await Box.find({ userId })
-            .populate('boxFrontElementIds') // Populate the box's own front elements
-            .populate('boxBackElementIds')   // Populate the box's own back elements
+        const boxesFromDB = await Box.find({ userId }) // Only user's boxes
+            .populate('boxFrontElementIds')
+            .populate('boxBackElementIds')
             .sort({ updatedAt: -1 })
-            .lean(); // Use lean for performance
+            .lean();
 
-        // Now, boxesFromDB contains plain JS objects where boxFrontElementIds (if populated)
-        // holds an array of Element objects, and same for boxBackElementIds.
-        // We need to transform this to match the desired output structure with both *_Ids and *_Elements.
-        const boxesForResponse = boxesFromDB.map(box => {
-            const responseBox = { ...box }; // Copy all existing properties
+        const boxesForResponse = boxesFromDB.map(box => ({
+            ...box,
+            boxFrontElements: box.boxFrontElementIds || [],
+            boxBackElements: box.boxBackElementIds || [],
+            boxFrontElementIds: (box.boxFrontElementIds || []).map(el => el._id),
+            boxBackElementIds: (box.boxBackElementIds || []).map(el => el._id),
+        }));
+        successResponse(res, "User boxes retrieved successfully.", boxesForResponse);
+    } catch (error) {
+        errorResponse(res, "Failed to retrieve user boxes.", 500, "FETCH_BOXES_FAILED", error.message);
+    }
+};
 
-            // Create the populated element arrays
-            responseBox.boxFrontElements = box.boxFrontElementIds || []; // Populated array
-            responseBox.boxBackElements = box.boxBackElementIds || [];   // Populated array
+exports.exportBoxAsJson = async (req, res) => {
+    console.log(`BOX_CONTROLLER: exportBoxAsJson called for boxId: ${req.params.boxId}`);
+    try {
+        const { boxId } = req.params;
+        const userId = req.user.id; // From protect middleware, user must be authenticated
 
-            // Re-create the ID-only arrays from the populated objects (if they exist)
-            responseBox.boxFrontElementIds = (box.boxFrontElementIds || []).map(element => element._id);
-            responseBox.boxBackElementIds = (box.boxBackElementIds || []).map(element => element._id);
-            
-            // Explicitly exclude cards from this list view, unless you decide otherwise
-            // delete responseBox.cards; // If .lean() somehow included it or if you add card population later
+        if (!mongoose.Types.ObjectId.isValid(boxId)) {
+            return errorResponse(res, "Invalid Box ID format.", 400, "INVALID_ID");
+        }
 
-            return responseBox;
+        // 1. Fetch the Box and populate its own elements
+        // We use .lean() for performance as we're just sending data.
+        const box = await Box.findOne({ _id: boxId, userId: userId })
+            .populate('boxFrontElementIds') // Populate with full Element documents
+            .populate('boxBackElementIds')  // Populate with full Element documents
+            .lean();
+
+        if (!box) {
+            return errorResponse(res, "Box not found or you are not authorized to export it.", 404, "NOT_FOUND_OR_UNAUTHORIZED");
+        }
+
+        // 2. Fetch all Cards for this Box, and populate their Elements
+        const cards = await Card.find({ boxId: box._id, userId: userId }) // Ensure cards also belong to the user
+            .populate('cardFrontElementIds') // Populate with full Element documents
+            .populate('cardBackElementIds')  // Populate with full Element documents
+            .sort({ orderInBox: 1 })
+            .lean();
+
+        // 3. Structure the data for JSON response
+        // The .lean() and .populate() calls have already given us most of what we need.
+        // We just need to ensure the arrays of element objects are named consistently
+        // if the frontend expects `boxFrontElements` and `cardFrontElements` etc.
+
+        const boxForExport = {
+            ...box,
+            // Rename populated ID arrays to the arrays of full element objects
+            boxFrontElements: box.boxFrontElementIds || [],
+            boxBackElements: box.boxBackElementIds || [],
+            // Optionally, remove the ID-only arrays if they are redundant for export
+            // delete box.boxFrontElementIds;
+            // delete box.boxBackElementIds;
+        };
+
+        const cardsForExport = cards.map(card => {
+            const cardObject = { ...card };
+            cardObject.cardFrontElements = card.cardFrontElementIds || [];
+            cardObject.cardBackElements = card.cardBackElementIds || [];
+            // Optionally remove ID-only arrays from cards too
+            // delete cardObject.cardFrontElementIds;
+            // delete cardObject.cardBackElementIds;
+            return cardObject;
         });
 
-        successResponse(res, "User boxes retrieved successfully.", boxesForResponse);
+        const exportData = {
+            box: boxForExport,
+            cards: cardsForExport
+        };
+
+        // 4. Send JSON response
+        // The successResponse helper will handle sending this as JSON.
+        // No need for Content-Disposition headers for a JSON API response.
+        // If the frontend wants to trigger a download of this JSON, it can do so.
+        successResponse(res, "Box data exported successfully as JSON.", exportData);
 
     } catch (error) {
-        console.error("Error in getUserBoxes Controller:", error.message, error.stack);
-        errorResponse(res, "Failed to retrieve user boxes.", 500, "FETCH_BOXES_FAILED", error.message);
+        console.error("Error in exportBoxAsJson Controller:", error.message, error.stack);
+        errorResponse(res, "Error exporting box data.", 500, "JSON_EXPORT_FAILED", error.message);
     }
 };
 
@@ -321,55 +465,88 @@ exports.getBoxById = async (req, res) => {
     console.log(`BOX_CONTROLLER: getBoxById called for boxId: ${req.params.boxId}`);
     try {
         const { boxId } = req.params;
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; 
+        let currentUserId = null; // Assume guest initially
+        let isAuthenticated = false;
+
+        // Optional token check to determine if a user is logged in
+        let token;
+        if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+            token = req.headers.authorization.split(' ')[1];
+            try {
+                const jwt = require('jsonwebtoken'); // require if not at top
+                const User = require('../models/User.model'); // require if not at top
+
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                const user = await User.findById(decoded.id).lean();
+                if (user) {
+                    currentUserId = user._id.toString();
+                    isAuthenticated = true;
+                }
+            } catch (err) {
+                // Token invalid or expired, proceed as guest for public access
+                console.log('Optional token check failed for getBoxById, proceeding as guest-can-view:', err.message);
+            }
+        }
 
         if (!mongoose.Types.ObjectId.isValid(boxId)) {
             return errorResponse(res, "Invalid Box ID format.", 400, "INVALID_ID");
         }
 
-        // 1. Find the Box and populate its own element ID fields
-        const boxFromDB = await Box.findOne({ _id: boxId, userId })
-            .populate('boxFrontElementIds') // Populate box's front elements
-            .populate('boxBackElementIds')   // Populate box's back elements
-            .lean(); // Get plain JavaScript objects for easier manipulation
+        const boxFromDB = await Box.findById(boxId)
+            .populate('boxFrontElementIds')
+            .populate('boxBackElementIds')
+            .lean();
 
         if (!boxFromDB) {
-            return errorResponse(res, "Box not found or not authorized.", 404, "NOT_FOUND");
+            return errorResponse(res, "Box not found.", 404, "NOT_FOUND");
         }
+
+        // Authorization Logic:
+        if (!boxFromDB.isGuestBox) { // If the box is NOT a guest box (i.e., it has an owner or should have one)
+            if (!isAuthenticated) {
+                return errorResponse(res, "Not authorized to view this box (login required).", 401, "AUTH_REQUIRED");
+            }
+            if (boxFromDB.userId && boxFromDB.userId.toString() !== currentUserId) {
+                return errorResponse(res, "Not authorized to view this box (ownership mismatch).", 403, "UNAUTHORIZED_ACCESS");
+            }
+            // If boxFromDB.userId is null but isGuestBox is false, it implies an inconsistent state,
+            // but for safety, if authenticated and userId doesn't match, deny.
+        }
+        // If it's a guest box (boxFromDB.isGuestBox is true), anyone can view it.
+        // If the user is authenticated and it's a guest box, they can still view it.
+
         console.log(`BOX_CONTROLLER: Found box ${boxId}. Populating its cards and their elements...`);
 
-        // 2. Find all Cards belonging to this Box
-        //    and populate their element IDs to get the actual element objects.
-        const cardsFromDB = await Card.find({ boxId: boxFromDB._id })
+        const cardQuery = { boxId: boxFromDB._id };
+        // If the box is owned, only show cards owned by that user (or guest cards if box was just claimed)
+        // If the box is guest, only show guest cards
+        if (boxFromDB.userId) {
+            cardQuery.userId = boxFromDB.userId;
+        } else {
+            cardQuery.isGuestCard = true;
+        }
+
+        const cardsFromDB = await Card.find(cardQuery)
             .populate('cardFrontElementIds')
             .populate('cardBackElementIds')
             .sort({ orderInBox: 1 })
-            .lean(); 
-        console.log(`BOX_CONTROLLER: Found ${cardsFromDB.length} cards for box ${boxId}.`);
-
-        // 3. Structure cards for the response (to have both IDs and populated Elements)
+            .lean();
+        
         const cardsForResponse = cardsFromDB.map(card => {
-            const responseCard = { ...card }; // Already a plain object due to .lean()
-            // Rename/copy populated ID arrays to desired element object arrays
+            const responseCard = { ...card };
             responseCard.cardFrontElements = card.cardFrontElementIds || [];
             responseCard.cardBackElements = card.cardBackElementIds || [];
-            // Re-create the ID-only arrays from the populated objects
             responseCard.cardFrontElementIds = (card.cardFrontElementIds || []).map(element => element._id);
             responseCard.cardBackElementIds = (card.cardBackElementIds || []).map(element => element._id);
             return responseCard;
         });
 
-        // 4. Structure the Box object for the response
-        const boxResponseObject = { ...boxFromDB }; // Already a plain object due to .lean()
-        
-        // Rename/copy populated box element ID arrays to desired element object arrays
+        const boxResponseObject = { ...boxFromDB };
         boxResponseObject.boxFrontElements = boxFromDB.boxFrontElementIds || [];
         boxResponseObject.boxBackElements = boxFromDB.boxBackElementIds || [];
-        // Re-create the ID-only arrays for box elements
         boxResponseObject.boxFrontElementIds = (boxFromDB.boxFrontElementIds || []).map(element => element._id);
         boxResponseObject.boxBackElementIds = (boxFromDB.boxBackElementIds || []).map(element => element._id);
-        
-        boxResponseObject.cards = cardsForResponse; // Assign the array of fully populated cards
+        boxResponseObject.cards = cardsForResponse;
 
         successResponse(res, "Box details retrieved successfully.", boxResponseObject);
 
@@ -380,85 +557,42 @@ exports.getBoxById = async (req, res) => {
 };
 
 exports.updateBox = async (req, res) => {
-    console.log(`BOX_CONTROLLER: updateBox called for boxId: ${req.params.boxId}`);
     try {
         const { boxId } = req.params;
-        const { 
-            name, 
-            description, 
-            defaultCardWidthPx, 
-            defaultCardHeightPx
-            // Potentially other fields like baseAISettings if you want to update them here
-        } = req.body;
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder for user ID
+        const updates = req.body; // name, description, defaults, baseAISettings
+        let userId = null;
+        if (req.user && req.user.id) userId = req.user.id;
 
         if (!mongoose.Types.ObjectId.isValid(boxId)) {
-            return res.status(400).json({success: false, message: "Invalid Box ID format." });
+            return errorResponse(res, "Invalid Box ID format.", 400);
         }
-
-        const updates = {};
-        if (name !== undefined) {
-            if (typeof name === 'string' && name.trim() !== '') {
-                updates.name = name.trim();
-            } else {
-                return res.status(400).json({ success: false, message: "Box name, if provided, must be a non-empty string." });
-            }
-        }
-        if (description !== undefined) updates.description = description; // Allow empty string for description
-        if (defaultCardWidthPx !== undefined) {
-            if (typeof defaultCardWidthPx === 'number' && defaultCardWidthPx > 0) {
-                updates.defaultCardWidthPx = defaultCardWidthPx;
-            } else {
-                 return res.status(400).json({ success: false, message: "Default card width, if provided, must be a positive number." });
-            }
-        }
-        if (defaultCardHeightPx !== undefined) {
-             if (typeof defaultCardHeightPx === 'number' && defaultCardHeightPx > 0) {
-                updates.defaultCardHeightPx = defaultCardHeightPx;
-            } else {
-                 return res.status(400).json({ success: false, message: "Default card height, if provided, must be a positive number." });
-            }
-        }
-        // Add logic here if you want to update parts of baseAISettings, e.g.:
-        // if (req.body.baseAISettings && typeof req.body.baseAISettings.userPrompt === 'string') {
-        //     updates['baseAISettings.userPrompt'] = req.body.baseAISettings.userPrompt;
-        // }
-
-
         if (Object.keys(updates).length === 0) {
-            return res.status(400).json({ success: false, message: "No valid fields provided for update." });
+            return errorResponse(res, "No update fields provided.", 400);
         }
+        // Sanitize updates - prevent changing userId or isGuestBox directly here
+        delete updates.userId; delete updates.isGuestBox;
+        delete updates.cards; // Cards are managed separately
 
-        updates.updatedAt = Date.now(); // Explicitly set for good measure
+        updates.updatedAt = Date.now();
 
-        const updatedBox = await Box.findOneAndUpdate(
-            { _id: boxId, userId: userId }, // Ensure user owns the box
-            { $set: updates },
-            { new: true, runValidators: true }
-        );
+        const boxQuery = { _id: boxId };
+        if (userId) boxQuery.userId = userId; else boxQuery.isGuestBox = true;
+
+        const updatedBox = await Box.findOneAndUpdate(boxQuery, { $set: updates }, { new: true, runValidators: true })
+            .populate('boxFrontElementIds').populate('boxBackElementIds').lean();
 
         if (!updatedBox) {
-            return res.status(404).json({ success: false, message: "Box not found or you are not authorized to update it." });
+            return errorResponse(res, "Box not found or not authorized to update.", 404);
         }
-
-        // If you want to return the box with its cards populated (like getBoxById):
-        // const cardsInBox = await Card.find({ boxId: updatedBox._id })
-        //     .populate('cardFrontElementIds')
-        //     .populate('cardBackElementIds')
-        //     .sort({ orderInBox: 1 })
-        //     .lean();
-        // const boxResponseObject = updatedBox.toObject();
-        // boxResponseObject.cards = cardsInBox.map(card => { /* ... map to desired card structure ... */ });
-        // res.status(200).json(boxResponseObject);
         
-        // For a simpler update response, just return the updated box:
-       successResponse(res, "Box updated successfully.", updatedBox);
+        const boxResponseObject = {...updatedBox};
+        boxResponseObject.boxFrontElements = updatedBox.boxFrontElementIds || [];
+        boxResponseObject.boxBackElements = updatedBox.boxBackElementIds || [];
+        boxResponseObject.boxFrontElementIds = (updatedBox.boxFrontElementIds || []).map(el => el._id);
+        boxResponseObject.boxBackElementIds = (updatedBox.boxBackElementIds || []).map(el => el._id);
 
+        successResponse(res, "Box updated successfully.", boxResponseObject);
     } catch (error) {
-        console.error("Error in updateBox Controller:", error.message, error.stack);
-        if (error.name === 'ValidationError') {
-            errorResponse(res, "Validation Error", 400, "VALIDATION_ERROR", error.message);
-        }
         errorResponse(res, "Error updating box.", 500, "BOX_UPDATE_FAILED", error.message);
     }
 };
@@ -466,20 +600,56 @@ exports.updateBox = async (req, res) => {
 exports.deleteBox = async (req, res) => {
     try {
         const { boxId } = req.params;
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
+        let userId = null;
+        if (req.user && req.user.id) userId = req.user.id;
 
-        const box = await Box.findOneAndDelete({ _id: boxId, userId });
-        if (!box) return res.status(404).json({ success:false, message: "Box not found or not authorized." });
+        if (!mongoose.Types.ObjectId.isValid(boxId)) {
+            return errorResponse(res, "Invalid Box ID format.", 400);
+        }
 
-        // Delete all cards associated with this box
-        await Card.deleteMany({ boxId: boxId });
-        console.log(`Deleted box ${boxId} and its associated cards.`);
-        successResponse(res, "Box and associated cards deleted successfully.", { boxId });
-    } catch (error) { 
-        errorResponse(res, "Error deleting box.", 500, "BOX_DELETE_FAILED", error.message);
-     }
+        const boxQuery = { _id: boxId };
+        if (userId) boxQuery.userId = userId; else boxQuery.isGuestBox = true;
+
+        const boxToDelete = await Box.findOne(boxQuery);
+        if (!boxToDelete) return errorResponse(res, "Box not found or not authorized.", 404);
+
+        // 1. Find all cards in the box
+        const cardsInBox = await Card.find({ boxId: boxToDelete._id });
+        const cardIdsInBox = cardsInBox.map(c => c._id);
+
+        // 2. Collect all element IDs from cards in the box and from the box itself
+        let allElementIdsToDelete = [
+            ...(boxToDelete.boxFrontElementIds || []),
+            ...(boxToDelete.boxBackElementIds || [])
+        ];
+        cardsInBox.forEach(card => {
+            allElementIdsToDelete.push(...(card.cardFrontElementIds || []));
+            allElementIdsToDelete.push(...(card.cardBackElementIds || []));
+        });
+        allElementIdsToDelete = [...new Set(allElementIdsToDelete.map(id => id.toString()))]; // Unique IDs
+
+        // 3. Delete all collected elements
+        if (allElementIdsToDelete.length > 0) {
+            const elementQueryDel = { _id: { $in: allElementIdsToDelete } };
+            if (userId) elementQueryDel.userId = userId; else elementQueryDel.isGuestElement = true;
+            await Element.deleteMany(elementQueryDel);
+        }
+
+        // 4. Delete all cards in the box
+        if (cardIdsInBox.length > 0) {
+            const cardQueryDel = { _id: { $in: cardIdsInBox } };
+            if (userId) cardQueryDel.userId = userId; else cardQueryDel.isGuestCard = true;
+            await Card.deleteMany(cardQueryDel);
+        }
+
+        // 5. Delete the box itself
+        await Box.findByIdAndDelete(boxId);
+
+        successResponse(res, "Box, associated cards, and elements deleted successfully.", { boxId });
+    } catch (error) {
+        errorResponse(res, "Error deleting box and its contents.", 500, "BOX_DELETE_CASCADE_FAILED", error.message);
+    }
 };
-
 // TODO: addBoxElement, updateBoxElement, deleteBoxElement (for box art)
 // These would modify box.boxFrontElements or box.boxBackElements
 // Similar to how card elements are managed, but on the Box model.
@@ -489,188 +659,120 @@ const getBoxElementArrayPath = (face) => {
 };
 
 // --- Box Element Management ---
-
 exports.addBoxElement = async (req, res) => {
-    console.log(`BOX_CONTROLLER: addBoxElement called for boxId: ${req.params.boxId}, query:`, req.query);
     try {
         const { boxId } = req.params;
-        // const { face = 'front' } = req.query; // ?face=front or ?face=back
-        // const { type, ...elementProps } = req.body;
+        const { isFrontElement, type, ...elementProps } = req.body;
+        let userId = null;
+        let isGuest = true;
+        if (req.user && req.user.id) { userId = req.user.id; }
+
+        if (!mongoose.Types.ObjectId.isValid(boxId)) return errorResponse(res, 'Invalid Box ID.', 400);
+        if (typeof isFrontElement !== 'boolean') return errorResponse(res, "isFrontElement (true/false) is required.", 400);
+        if (!type || !['text', 'image', 'shape'].includes(type)) return errorResponse(res, 'Invalid element type.', 400);
+
+        const boxQuery = { _id: boxId };
+        if (userId) boxQuery.userId = userId; else boxQuery.isGuestBox = true;
+        const box = await Box.findOne(boxQuery);
+        if (!box) return errorResponse(res, "Box not found or not authorized.", 404);
+
+        if (box.userId) isGuest = false; // If box is owned, element is not guest
+
+        const newElement = new Element({
+            ...elementProps, type,
+            boxId: box._id,
+            cardId: null, // Explicitly null for box elements
+            userId: box.userId, // Inherit userId from box (can be null for guest box)
+            isGuestElement: box.isGuestBox, // Match box's guest status
+            isFrontElement
+        });
+        const savedElement = await newElement.save();
+
+        const arrayPath = getBoxElementArrayPath(isFrontElement);
+        await Box.findByIdAndUpdate(boxId, { $push: { [arrayPath]: savedElement._id } });
         
-        const { face = 'front' } = req.query; // Still get from query as a potential default
-        const { type, isFrontElement: isFrontElementFromBody, ...elementProps } = req.body;
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d"; // Placeholder from auth
-
-        if (!mongoose.Types.ObjectId.isValid(boxId)) {
-            return res.status(400).json({ success:false, message: 'Invalid Box ID format.' });
-        }
-        if (!type || !['text', 'image', 'shape'].includes(type)) {
-            return res.status(400).json({ success:false, message: `Invalid or missing element type. Received: ${type}` });
-        }
-
-        // 1. Find the parent box and verify ownership
-        const box = await Box.findOne({ _id: boxId, userId });
-        if (!box) {
-            console.log("Box not found or user not authorized for boxId:", boxId);
-            return res.status(404).json({ success:false, message: "Box not found or not authorized." });
-        }
-        console.log("Found parent box:", box.name);
-
-        let finalIsFront;
-        if (typeof isFrontElementFromBody === 'boolean') {
-            finalIsFront = isFrontElementFromBody; // Body value takes precedence
-            console.log(`Using isFrontElement from BODY: ${finalIsFront}`);
-        } else {
-            finalIsFront = face.toLowerCase() === 'front'; // Fallback to query param logic
-            console.log(`Using isFrontElement from QUERY param ('${face}'): ${finalIsFront}`);
-        }
-
-        // 2. Create the new Element document for the Box
-        const newElementData = {
-            // cardId: null, // Explicitly null as this element belongs to a Box
-            boxId: box._id, // Link to this box
-            userId: box.userId, // Inherit userId
-            isFrontElement: finalIsFront, // Could be for box front/back
-            type,
-            ...elementProps
+        const updatedBox = await Box.findById(boxId)
+            .populate('boxFrontElementIds').populate('boxBackElementIds').lean();
+        
+        const boxForResponse = {
+            ...updatedBox,
+            boxFrontElements: updatedBox.boxFrontElementIds || [],
+            boxBackElements: updatedBox.boxBackElementIds || [],
+            boxFrontElementIds: (updatedBox.boxFrontElementIds || []).map(el => el._id),
+            boxBackElementIds: (updatedBox.boxBackElementIds || []).map(el => el._id),
         };
-        console.log("Data for new Box Element document:", newElementData);
-
-        const newElementDoc = new Element(newElementData);
-        const savedElement = await newElementDoc.save();
-        console.log("New Box Element saved, ID:", savedElement._id);
-
-        // 3. Add the new element's ID to the box's appropriate element ID array
-        const elementIdArrayPath = getBoxElementArrayPath(face); // 'boxFrontElementIds' or 'boxBackElementIds'
-        console.log("Pushing element ID to Box path:", elementIdArrayPath);
-
-        const updatedBox = await Box.findByIdAndUpdate(
-            boxId,
-            { $push: { [elementIdArrayPath]: savedElement._id }, $set: { updatedAt: Date.now() } },
-            { new: true, runValidators: true }
-        )
-        .populate('boxFrontElementIds') // Populate for the response
-        .populate('boxBackElementIds');
-
-        if (!updatedBox) {
-            await Element.findByIdAndDelete(savedElement._id); // Rollback element creation
-            return res.status(500).json({ success:false, message: "Failed to link element to box." });
-        }
-        
-        // Prepare response similarly to getBoxById if you want populated elements
-        const boxResponseObject = updatedBox.toObject();
-        boxResponseObject.boxFrontElements = (updatedBox.boxFrontElementIds || []).map(el => el.toObject ? el.toObject() : el);
-        boxResponseObject.boxBackElements = (updatedBox.boxBackElementIds || []).map(el => el.toObject ? el.toObject() : el);
-        // Keep original IDs arrays if frontend needs them
-        // boxResponseObject.boxFrontElementIds = (updatedBox.boxFrontElementIds || []).map(el => el._id);
-        // boxResponseObject.boxBackElementIds = (updatedBox.boxBackElementIds || []).map(el => el._id);
-
-
-        successResponse(res, "Element added to box successfully.", boxResponseObject, 200);
+        successResponse(res, "Element added to box.", boxForResponse, 201);
     } catch (error) {
-        if (error.name === 'ValidationError') {
-            return errorResponse(res, "Validation Error adding box element.", 400, "VALIDATION_ERROR", error.errors);
-        }
-        errorResponse(res, 'Error adding element to box.', 500, "ADD_BOX_ELEMENT_FAILED", error.message);
+        errorResponse(res, "Failed to add element to box.", 500, "ADD_BOX_ELEMENT_FAILED", error.message);
     }
 };
 
 exports.updateBoxElement = async (req, res) => {
-    console.log(`BOX_CONTROLLER: updateBoxElement called for boxId: ${req.params.boxId}, elementId: ${req.params.elementId}`);
     try {
-        const { boxId, elementId } = req.params; // elementId is Element's _id
-        // const { face = 'front' } = req.query; // Not strictly needed if elementId is globally unique
-        const updates = req.body; // e.g., { x: 10, y: 20, content: "New Text" }
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
+        const { elementId } = req.params; // Element's _id
+        const updates = req.body;
+        let userId = null;
+        if (req.user && req.user.id) userId = req.user.id;
 
-        if (!mongoose.Types.ObjectId.isValid(boxId) || !mongoose.Types.ObjectId.isValid(elementId)) {
-            return res.status(400).json({ success:false, message: "Invalid Box or Element ID format." });
-        }
-        if (Object.keys(updates).length === 0) {
-            return res.status(400).json({ success:false, message: "No update fields provided." });
-        }
-
-        // 1. Verify user owns the box (optional, but good for security)
-        const box = await Box.findOne({ _id: boxId, userId });
-        if (!box) {
-            return res.status(404).json({ success:false, message: "Box not found or not authorized." });
-        }
-
-        // 2. Find and update the Element document
-        // Ensure the element belongs to this user and this box
-        const updatedElement = await Element.findOneAndUpdate(
-            { _id: elementId, boxId: boxId, userId: userId },
-            { $set: updates },
-            { new: true, runValidators: true }
-        );
-
-        if (!updatedElement) {
-            return res.status(404).json({ success:false, message: "Element not found on this box, or not authorized to update it." });
-        }
+        if (!mongoose.Types.ObjectId.isValid(elementId)) return errorResponse(res, "Invalid Element ID.", 400);
+        if (Object.keys(updates).length === 0) return errorResponse(res, "No updates provided.", 400);
         
-        // Return the updated Box with populated elements for context
-        const updatedBoxWithPopulatedElements = await Box.findById(boxId)
-            .populate('boxFrontElementIds')
-            .populate('boxBackElementIds');
+        delete updates.cardId; delete updates.boxId; delete updates.userId;
+        delete updates.isFrontElement; delete updates.isGuestElement;
 
-        const boxResponseObject = updatedBoxWithPopulatedElements.toObject();
-        boxResponseObject.boxFrontElements = (updatedBoxWithPopulatedElements.boxFrontElementIds || []).map(el => el.toObject ? el.toObject() : el);
-        boxResponseObject.boxBackElements = (updatedBoxWithPopulatedElements.boxBackElementIds || []).map(el => el.toObject ? el.toObject() : el);
-
-        console.log(`Box Element ${elementId} updated.`);
-        successResponse(res, "Box element updated successfully.", boxResponseObject, 200);
+        const elementQuery = { _id: elementId, cardId: null }; // Ensure it's a box element
+        if (userId) elementQuery.userId = userId; else elementQuery.isGuestElement = true;
+        
+        const updatedElement = await Element.findOneAndUpdate(elementQuery, { $set: updates }, { new: true });
+        if (!updatedElement) return errorResponse(res, "Box element not found or not authorized.", 404);
+        
+        const parentBox = await Box.findById(updatedElement.boxId)
+            .populate('boxFrontElementIds').populate('boxBackElementIds').lean();
+        
+        const boxForResponse = {
+            ...parentBox,
+            boxFrontElements: parentBox.boxFrontElementIds || [],
+            boxBackElements: parentBox.boxBackElementIds || [],
+            boxFrontElementIds: (parentBox.boxFrontElementIds || []).map(el => el._id),
+            boxBackElementIds: (parentBox.boxBackElementIds || []).map(el => el._id),
+        };
+        successResponse(res, "Box element updated.", boxForResponse);
     } catch (error) {
-        if (error.name === 'ValidationError') {
-            return errorResponse(res, "Validation Error updating box element.", 400, "VALIDATION_ERROR", error.errors);
-        }
-        errorResponse(res, 'Error updating element to box.', 500, "UPDATE_BOX_ELEMENT_FAILED", error.message);
+        errorResponse(res, "Failed to update box element.", 500, "UPDATE_BOX_ELEMENT_FAILED", error.message);
     }
 };
 
 exports.deleteBoxElement = async (req, res) => {
-    console.log(`BOX_CONTROLLER: deleteBoxElement called for boxId: ${req.params.boxId}, elementId: ${req.params.elementId}`);
     try {
-        const { boxId, elementId } = req.params;
-        // const { face = 'front' } = req.query; // Needed to know which array to $pull from
-        const userId = req.user?.id || "60c72b2f9b1e8b5a70d4834d";
+        const { elementId } = req.params; // Element's _id
+        let userId = null;
+        if (req.user && req.user.id) userId = req.user.id;
 
-        if (!mongoose.Types.ObjectId.isValid(boxId) || !mongoose.Types.ObjectId.isValid(elementId)) {
-            return res.status(400).json({ success:false, message: "Invalid Box or Element ID format." });
-        }
-        
-        // 1. Find the element to determine if it's front or back (and for auth)
-        const elementToDelete = await Element.findOne({ _id: elementId, boxId: boxId, userId: userId });
-        if (!elementToDelete) {
-            return res.status(404).json({ success:false, message: "Element not found on this box or not authorized." });
-        }
+        if (!mongoose.Types.ObjectId.isValid(elementId)) return errorResponse(res, "Invalid Element ID.", 400);
 
-        // 2. Delete the Element document itself
+        const elementQuery = { _id: elementId, cardId: null }; // Box element
+        if (userId) elementQuery.userId = userId; else elementQuery.isGuestElement = true;
+
+        const elementToDelete = await Element.findOne(elementQuery);
+        if (!elementToDelete) return errorResponse(res, "Box element not found or not authorized.", 404);
+
+        const boxId = elementToDelete.boxId;
+        const arrayPath = getBoxElementArrayPath(elementToDelete.isFrontElement);
+
         await Element.findByIdAndDelete(elementId);
-        console.log(`Box Element ${elementId} deleted from Elements collection.`);
-
-        // 3. Pull the element's ID from the Box's appropriate array
-        const elementIdArrayPath = elementToDelete.isFrontElement ? 'boxFrontElementIds' : 'boxBackElementIds';
-        
-        const updatedBox = await Box.findByIdAndUpdate(
-            boxId,
-            { $pull: { [elementIdArrayPath]: elementId }, $set: {updatedAt: Date.now()} },
+        const updatedBox = await Box.findByIdAndUpdate(boxId, 
+            { $pull: { [arrayPath]: elementId }, $set: {updatedAt: Date.now()} }, 
             { new: true }
-        )
-        .populate('boxFrontElementIds')
-        .populate('boxBackElementIds');
+        ).populate('boxFrontElementIds').populate('boxBackElementIds').lean();
 
-        if (!updatedBox) {
-             // This case should be rare if the box was found earlier, but means the $pull didn't modify anything
-            console.error("Box not found during $pull operation for element deletion, or element was already removed.");
-            return res.status(404).json({ success:false, message: "Box not found or element already removed." });
-        }
-
-        const boxResponseObject = updatedBox.toObject();
-        boxResponseObject.boxFrontElements = (updatedBox.boxFrontElementIds || []).map(el => el.toObject ? el.toObject() : el);
-        boxResponseObject.boxBackElements = (updatedBox.boxBackElementIds || []).map(el => el.toObject ? el.toObject() : el);
-
-        successResponse(res, "Box element deleted successfully.", boxResponseObject, 200);
+        const responseBox = { ...updatedBox };
+        responseBox.boxFrontElements = updatedBox.boxFrontElementIds || [];
+        responseBox.boxBackElements = updatedBox.boxBackElementIds || [];
+        responseBox.boxFrontElementIds = (updatedBox.boxFrontElementIds || []).map(el => el._id);
+        responseBox.boxBackElementIds = (updatedBox.boxBackElementIds || []).map(el => el._id);
+        
+        successResponse(res, "Box element deleted.", responseBox);
     } catch (error) {
-        errorResponse(res, 'Error deleting box.', 500, "DELETE_BOX_ELEMENT_FAILED", error.message);
+        errorResponse(res, "Error deleting box element.", 500, error.message);
     }
 };

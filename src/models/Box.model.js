@@ -8,8 +8,12 @@ const BoxSchema = new mongoose.Schema({
     userId: { 
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User', 
-        required: true,
+        required: false,
         index: true
+    },
+    isGuestBox: { // Flag to indicate if it's a guest-created box
+        type: Boolean,
+        default: true
     },
     defaultCardWidthPx: { type: Number, default: 315 },
     defaultCardHeightPx: { type: Number, default: 440 },

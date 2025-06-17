@@ -3,9 +3,13 @@ const mongoose = require('mongoose');
 const ElementSchema = require('./Element.model.js'); // Import the ElementSchema
 
 const CardSchema = new mongoose.Schema({
-     name: { type: String, default: 'Untitled Card' },
+    name: { type: String, default: 'Untitled Card' },
     boxId: { type: mongoose.Schema.Types.ObjectId, ref: 'Box', required: true, index: true },
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', /* required: true */ },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false },
+    isGuestCard: { // Flag to indicate if it's a guest-created box
+        type: Boolean,
+        default: true
+    },
     orderInBox: { type: Number, default: 0 },
     widthPx: { type: Number, required: true },
     heightPx: { type: Number, required: true },
