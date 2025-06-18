@@ -25,6 +25,25 @@ const BoxSchema = new mongoose.Schema({
         imageOutputFormat: String,
         cardBackImage: String // DataURI or URL for the default back for cards in this box
     },
+    
+    // --- NEW FIELD ---
+    // Embeds the game rules directly in the box document for quick access.
+    // This is managed and updated by the RuleSet controller.
+    ruleSetId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'RuleSet',
+        required: false // Not every box must have rules
+    },
+    game_rules: {
+        difficulty_level: { type: String, enum: ['easier', 'moderate', 'expert'] },
+        game_roles: { type: Number },
+        rules_data: [{
+            _id: false, // Don't add mongoose _id to subdocuments
+            heading: { type: String },
+            description: { type: String },
+            status: { type: String, enum: ['enabled', 'disabled'] }
+        }]
+    },
 
     // Elements for the box itself (e.g., box art front/back)
     // These store ObjectId references to documents in the 'Element' collection

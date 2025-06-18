@@ -7,6 +7,50 @@ const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken'); // For optional token check
 const User = require('../models/User.model'); // For optional token check
+const RuleSet = require('../models/RuleSet.model');
+
+// --- NEW CONSTANT for Game Rules AI Prompt ---
+const GAME_RULES_SYSTEM_INSTRUCTION = `
+You are a game design assistant. Your task is to generate a set of core game rules based on a user's prompt for a card game.
+- The output MUST follow this strict format: Each rule is a heading on its own line, followed by a description in parentheses on the next line.
+- Do NOT include any conversational text, introductions, summaries, or any text outside of this heading/description format.
+- Do NOT number the headings.
+- Example Output Format:
+Heading One
+(Description for rule one goes here.)
+Heading Two
+(Description for rule two goes here.)
+- Generate between 3 to 5 core rules.
+- The rules should be clear, concise, and suitable for the game described in the user's prompt.
+`;
+
+// --- NEW HELPER FUNCTION for Parsing AI Rules ---
+function parseRulesFromAiText(rawText) {
+    if (!rawText || typeof rawText !== 'string') {
+        return [];
+    }
+    const rules = [];
+    const lines = rawText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    
+    for (let i = 0; i < lines.length; i++) {
+        // A heading is a line that is NOT wrapped in parentheses.
+        // The next line SHOULD be the description, wrapped in parentheses.
+        if (!lines[i].startsWith('(') && !lines[i].endsWith(')')) {
+            const heading = lines[i];
+            if (i + 1 < lines.length && lines[i + 1].startsWith('(') && lines[i + 1].endsWith(')')) {
+                // Remove parentheses and trim for the description
+                const description = lines[i + 1].slice(1, -1).trim();
+                rules.push({
+                    heading: heading,
+                    description: description,
+                    status: 'enabled' // Default status
+                });
+                i++; // Increment i to skip the description line in the next iteration
+            }
+        }
+    }
+    return rules;
+}
 
 // --- Constants (can be moved to a config file) ---
 const CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION = `
@@ -64,6 +108,7 @@ exports.generateNewDeckAndBox = async (req, res) => {
      try {
         const {
             boxName, boxDescription = "", userPrompt, genre = "Educational",
+            ruleSetId,
             accentColorHex = "#333333", defaultCardWidthPx = 315, defaultCardHeightPx = 440,
             imageAspectRatioForDeck = null, imageOutputFormatForDeck = "png",
             numCardsInDeck = 1, cardBackImageDataUri = null,
@@ -78,6 +123,30 @@ exports.generateNewDeckAndBox = async (req, res) => {
         // This part requires a "soft" auth check middleware or direct token verification here.
         // For simplicity, let's assume for now: if no token, it's a guest.
         // If you send a token, you'd need to verify it here (similar to 'protect' but not failing if no token).
+
+         // 1. Fetch and Authorize the RuleSet
+        if (!mongoose.Types.ObjectId.isValid(ruleSetId)) {
+            return errorResponse(res, "Invalid RuleSet ID provided.", 400);
+        }
+        const ruleSet = await RuleSet.findById(ruleSetId);
+        if (!ruleSet) {
+            return errorResponse(res, "RuleSet with the provided ID not found.", 404);
+        }
+
+        // Authorization Check for RuleSet
+        if (isGuest && !ruleSet.isGuestRuleSet) {
+            return errorResponse(res, "Guests cannot use a private RuleSet.", 403);
+        }
+        if (!isGuest && ruleSet.userId && ruleSet.userId.toString() !== userId.toString()) {
+            return errorResponse(res, "You are not authorized to use this RuleSet.", 403);
+        }
+
+        // 2. Prepare AI Prompts using data from the fetched RuleSet
+        const game_rules = {
+            difficulty_level: ruleSet.difficulty_level,
+            game_roles: ruleSet.game_roles,
+            rules_data: ruleSet.rules_data.map(r => ({ heading: r.heading, description: r.description, status: r.status }))
+        };
 
         // Let's assume for now: if req.user exists (e.g. if you make 'protect' middleware optional)
         if (req.user && req.user.id) { // req.user would be set by a modified/optional protect middleware
@@ -128,9 +197,25 @@ exports.generateNewDeckAndBox = async (req, res) => {
             imageOutputFormat: imageOutputFormatForDeck,
             cardBackImage: cardBackImageDataUri // This is the default for the deck being generated
         };
-        
+        // --- NEW: Enhance AI prompt with provided rules ---
+        const rulesContextString = game_rules.rules_data
+            .filter(rule => rule.status === 'enabled')
+            .map(rule => `- ${rule.heading}: ${rule.description}`)
+            .join('\n');
+
         const imageGenPromptForStability = userPrompt; // Assuming frontend combines style prompts into userPrompt
-        const textListPromptForGemini = `User Request: Generate ${numCardsInDeck} unique, concise but complete data items, max 100 characters long each item... related to "${userPrompt}"...\n\nData Items List: (never include headings, descriptions, only provide single line per item.)`;
+        const textListPromptForGemini = `
+        Game Context:
+        The game is about: "${userPrompt}".
+        The core rules are:
+        ${rulesContextString}
+        
+        User Request:
+        Based on the game context above, generate a list of ${numCardsInDeck} unique, concise, but complete data items for the game cards. Each item should be max 100 characters long.
+        
+        Data Items List: (never include headings, descriptions, or any other text; only provide one data item per line.)`;
+        
+        const rulesPromptForGemini = `The game is: "${userPrompt}". Generate rules based on this.`;
 
         // --- 2. Call AI Services ---
         let aiFrontImageDataUri, generatedTextListData;
@@ -141,7 +226,7 @@ exports.generateNewDeckAndBox = async (req, res) => {
         const textPromise = aiService.generateTextWithGemini(textListPromptForGemini, undefined, CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION)
             .catch(err => { textGenError = err.message; return null; });
         [aiFrontImageDataUri, generatedTextListData] = await Promise.all([imagePromise, textPromise]);
-
+        
         // --- 3. Process AI Results ---
         const aiFrontImageGeneratedSuccessfully = !!aiFrontImageDataUri;
         const textListGeneratedSuccessfully = !!generatedTextListData;
@@ -172,15 +257,29 @@ exports.generateNewDeckAndBox = async (req, res) => {
                 finalTextsForCards.push(`[Placeholder - Card ${i + 1} - Item missing or empty from AI]`);
             }
         }
+
+
         // --- 4. Create Box Document (without cards initially) ---
         const newBoxData = {
             name: boxName.trim(), description: boxDescription, userId,
             isGuestBox: isGuest,
-            defaultCardWidthPx, defaultCardHeightPx, aiSettingsForThisBox
+            defaultCardWidthPx, defaultCardHeightPx, aiSettingsForThisBox,
+            ruleSetId: ruleSet._id, // <-- LINK the RuleSet ID
+            game_rules: game_rules // <-- EMBED the data
         };
         const newBox = new Box(newBoxData);
         const savedBox = await newBox.save();
         console.log("BOX_CONTROLLER: Box saved, ID:", savedBox._id);
+        // // --- NEW: 5. Create Separate RuleSet Document ---
+        // const newRuleSetData = {
+        //     name: `${savedBox.name} Rules`,
+        //     boxId: savedBox._id,
+        //     userId: savedBox.userId,
+        //     isGuestRuleSet: savedBox.isGuestBox,
+        //     ...gameRulesForBox
+        // };
+        // const savedRuleSet = await new RuleSet(newRuleSetData).save();
+        // console.log("BOX_CONTROLLER: RuleSet saved, ID:", savedRuleSet._id);
         // We don't save the box yet, or we save it and then update it with card IDs if needed.
         // For returning a populated box, it's easier to construct the object in memory.
 
@@ -275,14 +374,13 @@ exports.generateNewDeckAndBox = async (req, res) => {
         boxResponseObject.cards = generatedCardsDataForResponse; // Embed fully populated cards
 
         // Add flags to top-level data if preferred, or keep in metadata of box/cards
-        const responseData = {
-            box: boxResponseObject, // The primary data is the box with its cards
-            imageWasAIgenerated: aiFrontImageGeneratedSuccessfully,
-            textListWasGenerated: textListGeneratedSuccessfully,
-            rawText: generatedTextListData
+        const responseData = { 
+            box: boxResponseObject, 
+            imageWasAIgenerated: aiFrontImageGeneratedSuccessfully, 
+            textListWasGenerated: textListGeneratedSuccessfully, 
+            rawText: generatedTextListData 
         };
-        
-        successResponse(res, `Box "${savedBox.name}" and ${generatedCardsDataForResponse.length} cards created.`, responseData, 201);
+        successResponse(res, `Box "${savedBox.name}" and ${numCardsInDeck} cards created.`, responseData, 201);
 
     } catch (error) {
         console.error("Error in generateNewDeckAndBox Controller:", error.message, error.stack);
@@ -320,6 +418,19 @@ exports.claimBox = async (req, res) => {
             { boxId: box._id, isGuestElement: true }, // Elements directly on box OR on cards in this box
             { $set: { userId: userId, isGuestElement: false } }
         );
+
+         // --- NEW: 3. Claim the associated RuleSet ---
+        if (box.ruleSetId) {
+            const ruleSetClaimResult = await RuleSet.findOneAndUpdate(
+                { _id: box.ruleSetId, isGuestRuleSet: true }, // Find the linked guest ruleset
+                { $set: { userId: userId, isGuestRuleSet: false } } // Claim it
+            );
+            if (ruleSetClaimResult) {
+                console.log(`Successfully claimed associated RuleSet ID: ${box.ruleSetId}`);
+            } else {
+                console.log(`Note: RuleSet ID ${box.ruleSetId} was already claimed or does not exist.`);
+            }
+        }
         
         // Refetch data to return fully populated and updated structures
         const updatedBox = await Box.findById(boxId).populate('boxFrontElementIds').populate('boxBackElementIds').lean();

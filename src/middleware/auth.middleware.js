@@ -34,6 +34,22 @@ exports.protect = async (req, res, next) => {
     }
 };
 
+exports.optionalProtect = async (req, res, next) => {
+    let token;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+        try {
+            token = req.headers.authorization.split(' ')[1];
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            req.user = await User.findById(decoded.id).select('-password');
+        } catch (err) {
+            // Token is invalid/expired, but we don't care, just proceed as a guest
+            console.log('Optional protect: Invalid token, proceeding as guest.');
+            req.user = null;
+        }
+    }
+    next();
+};
+
 // Grant access to specific roles (example)
 exports.authorize = (...roles) => {
     return (req, res, next) => {
