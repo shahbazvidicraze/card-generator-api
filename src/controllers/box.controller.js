@@ -102,290 +102,220 @@ function errorResponse(res, message, statusCode = 500, errorCode = null, details
     res.status(statusCode).json({ success: false, message: errorPayload.details });
 }
 
-// This is the function we worked on, moved here
 exports.generateNewDeckAndBox = async (req, res) => {
     console.log("BOX_CONTROLLER: generateNewDeckAndBox started.");
      try {
         const {
-            boxName, boxDescription = "", userPrompt, genre = "Educational",
-            ruleSetId,
-            accentColorHex = "#333333", defaultCardWidthPx = 315, defaultCardHeightPx = 440,
-            imageAspectRatioForDeck = null, imageOutputFormatForDeck = "png",
-            numCardsInDeck = 1, cardBackImageDataUri = null,
+            boxName,
+            boxDescription = "",
+            userPrompt,
+            genre = "Educational",
+            ruleSetId, // This is now optional
+            accentColorHex = "#333333",
+            defaultCardWidthPx = 315,
+            defaultCardHeightPx = 440,
+            imageAspectRatioForDeck = null,
+            imageOutputFormatForDeck = "png",
+            numCardsInDeck = 1,
+            cardBackImageDataUri = null,
             fallbackFrontImageBase64DataUri = null
         } = req.body;
 
+        // --- Optional Authentication ---
         let userId = null;
         let isGuest = true;
-
-        // Optional: Check for an auth token even if route isn't protected
-        // This allows logged-in users to have their creations immediately associated.
-        // This part requires a "soft" auth check middleware or direct token verification here.
-        // For simplicity, let's assume for now: if no token, it's a guest.
-        // If you send a token, you'd need to verify it here (similar to 'protect' but not failing if no token).
-
-         // 1. Fetch and Authorize the RuleSet
-        if (!mongoose.Types.ObjectId.isValid(ruleSetId)) {
-            return errorResponse(res, "Invalid RuleSet ID provided.", 400);
-        }
-        const ruleSet = await RuleSet.findById(ruleSetId);
-        if (!ruleSet) {
-            return errorResponse(res, "RuleSet with the provided ID not found.", 404);
-        }
-
-        // Authorization Check for RuleSet
-        if (isGuest && !ruleSet.isGuestRuleSet) {
-            return errorResponse(res, "Guests cannot use a private RuleSet.", 403);
-        }
-        if (!isGuest && ruleSet.userId && ruleSet.userId.toString() !== userId.toString()) {
-            return errorResponse(res, "You are not authorized to use this RuleSet.", 403);
-        }
-
-        // 2. Prepare AI Prompts using data from the fetched RuleSet
-        const game_rules = {
-            difficulty_level: ruleSet.difficulty_level,
-            game_roles: ruleSet.game_roles,
-            rules_data: ruleSet.rules_data.map(r => ({ heading: r.heading, description: r.description, status: r.status }))
-        };
-
-        // Let's assume for now: if req.user exists (e.g. if you make 'protect' middleware optional)
-        if (req.user && req.user.id) { // req.user would be set by a modified/optional protect middleware
+        if (req.user && req.user.id) {
             userId = req.user.id;
             isGuest = false;
         }
-        // OR, if you want to handle the token explicitly in this controller:
-        let token;
-        if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-            token = req.headers.authorization.split(' ')[1];
-            try {
-                const decoded = jwt.verify(token, process.env.JWT_SECRET);
-                const user = await User.findById(decoded.id);
-                if (user) {
-                    userId = user._id;
-                    isGuest = false;
-                }
-            } catch (err) {
-                // Token invalid or expired, proceed as guest
-                console.log('Optional token check failed, proceeding as guest:', err.message);
+
+        // --- Validation ---
+        if (!boxName || !userPrompt) {
+            return errorResponse(res, "A box name and user prompt are required.", 400);
+        }
+
+        // --- 1. Conditional RuleSet Logic ---
+        let game_rules = null;
+        let rulesContextString = "No specific rules provided.";
+
+        // This entire block only runs if a ruleSetId is provided in the request.
+        if (ruleSetId) {
+            if (!mongoose.Types.ObjectId.isValid(ruleSetId)) {
+                return errorResponse(res, "Invalid RuleSet ID format provided.", 400);
             }
+            const ruleSet = await RuleSet.findById(ruleSetId);
+            if (!ruleSet) {
+                return errorResponse(res, "RuleSet with the provided ID not found.", 404);
+            }
+
+            // Authorization Check for RuleSet
+            if (isGuest && !ruleSet.isGuestRuleSet) {
+                return errorResponse(res, "Guests cannot use a private RuleSet.", 403);
+            }
+            if (!isGuest && ruleSet.userId && ruleSet.userId.toString() !== userId.toString()) {
+                return errorResponse(res, "You are not authorized to use this RuleSet.", 403);
+            }
+
+            // Populate game_rules object and context string from the found ruleset
+            game_rules = {
+                difficulty_level: ruleSet.difficulty_level,
+                game_roles: ruleSet.game_roles,
+                rules_data: ruleSet.rules_data.map(r => ({ heading: r.heading, description: r.description, status: r.status }))
+            };
+
+            rulesContextString = game_rules.rules_data
+                .filter(rule => rule.status === 'enabled')
+                .map(rule => `- ${rule.heading}: ${rule.description}`)
+                .join('\n');
+            console.log(`Using RuleSet ${ruleSetId} for AI context.`);
+        } else {
+            console.log("No RuleSet ID provided, proceeding without rules context.");
         }
 
-        if (typeof boxName !== 'string' || boxName.trim() === '') {
-            return res.status(400).json({ success: false, message: "Box name is required and must be a valid string." });
-        }
-        if (!userPrompt || typeof userPrompt !== 'string' || userPrompt.trim() === '') {
-            return res.status(400).json({ success: false, message: "A user prompt is required." });
-        }
-        // ... other validations for numCardsInDeck etc. ...
 
-        // --- 1. Determine AI Settings & Prepare Prompts ---
-        const supportedStabilityRatios = [
-            { string: "21:9", value: 21/9 }, { string: "16:9", value: 16/9 }, { string: "3:2", value: 3/2 },
-            { string: "5:4", value: 5/4 }, { string: "1:1", value: 1/1 }, { string: "4:5", value: 4/5 },
-            { string: "2:3", value: 2/3 }, { string: "9:16", value: 9/16 }, { string: "9:21", value: 9/21 }
-        ];
+        // --- 2. AI Prompt Preparation ---
+        // AI prompt will use detailed context if rules were provided, or generic text if not.
+        const textListPromptForGemini = `Game Context:\nThe game is about: "${userPrompt}".\nThe core rules are:\n${rulesContextString}\n\nUser Request:\nBased on the game context above, generate a list of ${numCardsInDeck} unique, concise data items for game cards. Each item should be max 100 characters long.\n\nData Items List:`;
+        const imageGenPromptForStability = userPrompt;
+
+        const supportedStabilityRatios = [ { string: "21:9", value: 21/9 }, { string: "16:9", value: 16/9 }, { string: "3:2", value: 3/2 }, { string: "5:4", value: 5/4 }, { string: "1:1", value: 1/1 }, { string: "4:5", value: 4/5 }, { string: "2:3", value: 2/3 }, { string: "9:16", value: 9/16 }, { string: "9:21", value: 9/21 }];
         let finalAspectRatioForAI = getClosestSupportedAspectRatio(defaultCardWidthPx, defaultCardHeightPx, supportedStabilityRatios);
         if (imageAspectRatioForDeck && supportedStabilityRatios.some(r => r.string === imageAspectRatioForDeck)) {
             finalAspectRatioForAI = imageAspectRatioForDeck;
         }
 
-        const aiSettingsForThisBox = { // Renamed for clarity, or keep as boxAISettings
-            userPrompt: userPrompt, 
-            genre: genre, 
-            accentColorHex: accentColorHex,
-            imageAspectRatio: finalAspectRatioForAI, 
-            imageOutputFormat: imageOutputFormatForDeck,
-            cardBackImage: cardBackImageDataUri // This is the default for the deck being generated
-        };
-        // --- NEW: Enhance AI prompt with provided rules ---
-        const rulesContextString = game_rules.rules_data
-            .filter(rule => rule.status === 'enabled')
-            .map(rule => `- ${rule.heading}: ${rule.description}`)
-            .join('\n');
-
-        const imageGenPromptForStability = userPrompt; // Assuming frontend combines style prompts into userPrompt
-        const textListPromptForGemini = `
-        Game Context:
-        The game is about: "${userPrompt}".
-        The core rules are:
-        ${rulesContextString}
-        
-        User Request:
-        Based on the game context above, generate a list of ${numCardsInDeck} unique, concise, but complete data items for the game cards. Each item should be max 100 characters long.
-        
-        Data Items List: (never include headings, descriptions, or any other text; only provide one data item per line.)`;
-        
-        const rulesPromptForGemini = `The game is: "${userPrompt}". Generate rules based on this.`;
-
-        // --- 2. Call AI Services ---
+        // --- 3. Call AI Services ---
         let aiFrontImageDataUri, generatedTextListData;
         let imageGenError = null, textGenError = null;
-        // ... (Promise.all for imagePromise and textPromise - same as before) ...
-        const imagePromise = aiService.generateImageWithStabilityAI(imageGenPromptForStability, imageOutputFormatForDeck, finalAspectRatioForAI)
-            .catch(err => { imageGenError = err.message; return null; });
-        const textPromise = aiService.generateTextWithGemini(textListPromptForGemini, undefined, CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION)
-            .catch(err => { textGenError = err.message; return null; });
+
+        const imagePromise = aiService.generateImageWithStabilityAI(imageGenPromptForStability, imageOutputFormatForDeck, finalAspectRatioForAI).catch(err => { imageGenError = err.message; return null; });
+        const textPromise = aiService.generateTextWithGemini(textListPromptForGemini, undefined, CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION).catch(err => { textGenError = err.message; return null; });
+
         [aiFrontImageDataUri, generatedTextListData] = await Promise.all([imagePromise, textPromise]);
-        
-        // --- 3. Process AI Results ---
+
+
+        // --- 4. Process AI Results ---
         const aiFrontImageGeneratedSuccessfully = !!aiFrontImageDataUri;
         const textListGeneratedSuccessfully = !!generatedTextListData;
+        const DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL = ""; // Define your placeholder if any
 
         if (!aiFrontImageGeneratedSuccessfully && !textListGeneratedSuccessfully && !fallbackFrontImageBase64DataUri && !DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL) {
-            return res.status(502).json({ success: false, message: "Both AI failed, no fallbacks available." });
+            return res.status(502).json({ success: false, message: "Both AI failed, and no fallbacks were available." });
         }
-        
+
         let finalFrontImageToUse = aiFrontImageGeneratedSuccessfully ? aiFrontImageDataUri : (fallbackFrontImageBase64DataUri || DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL);
-        let textItemsArray = []; /* ... populate textItemsArray or placeholders ... */
-        const finalTextsForCards = []; /* ... ensure targetNumTexts ... */
-
-        if (textListGeneratedSuccessfully && typeof generatedTextListData === 'string') {
-            // Split Gemini's multi-line response into an array of individual text items
-            textItemsArray = generatedTextListData.split('\n')
-                                            .map(item => item.trim()) // Remove leading/trailing whitespace from each item
-                                            .filter(item => item.length > 0); // Remove any empty lines
-        } else {
-            for (let i = 0; i < numCardsInDeck; i++) {
-                textItemsArray.push(`[Placeholder - Text Gen Failed - Card ${i + 1} - Topic: ${userPrompt} - Error: ${textGenerationError || 'Unknown'}]`);
-            }
-        }
-
+        const textItemsArray = (generatedTextListData || '').split('\n').map(item => item.trim()).filter(item => item.length > 0);
+        const finalTextsForCards = [];
         for (let i = 0; i < numCardsInDeck; i++) {
-            if (i < textItemsArray.length && textItemsArray[i]) { // Check if item exists and is not empty
-                finalTextsForCards.push(textItemsArray[i]);
-            } else {
-                finalTextsForCards.push(`[Placeholder - Card ${i + 1} - Item missing or empty from AI]`);
-            }
+            finalTextsForCards.push(textItemsArray[i] || `[Placeholder Card Content ${i + 1}]`);
         }
 
 
-        // --- 4. Create Box Document (without cards initially) ---
+        // --- 5. Create Box Document in Database ---
         const newBoxData = {
-            name: boxName.trim(), description: boxDescription, userId,
+            name: boxName.trim(),
+            description: boxDescription,
+            userId: userId,
             isGuestBox: isGuest,
-            defaultCardWidthPx, defaultCardHeightPx, aiSettingsForThisBox,
-            ruleSetId: ruleSet._id, // <-- LINK the RuleSet ID
-            game_rules: game_rules // <-- EMBED the data
+            defaultCardWidthPx: defaultCardWidthPx,
+            defaultCardHeightPx: defaultCardHeightPx,
+            baseAISettings: { userPrompt, genre, accentColorHex, imageAspectRatio: finalAspectRatioForAI, imageOutputFormat: imageOutputFormatForDeck, cardBackImage: cardBackImageDataUri },
+            ruleSetId: ruleSetId || null,
+            game_rules: game_rules
         };
-        const newBox = new Box(newBoxData);
-        const savedBox = await newBox.save();
+        const savedBox = await new Box(newBoxData).save();
         console.log("BOX_CONTROLLER: Box saved, ID:", savedBox._id);
-        // // --- NEW: 5. Create Separate RuleSet Document ---
-        // const newRuleSetData = {
-        //     name: `${savedBox.name} Rules`,
-        //     boxId: savedBox._id,
-        //     userId: savedBox.userId,
-        //     isGuestRuleSet: savedBox.isGuestBox,
-        //     ...gameRulesForBox
-        // };
-        // const savedRuleSet = await new RuleSet(newRuleSetData).save();
-        // console.log("BOX_CONTROLLER: RuleSet saved, ID:", savedRuleSet._id);
-        // We don't save the box yet, or we save it and then update it with card IDs if needed.
-        // For returning a populated box, it's easier to construct the object in memory.
 
-        // --- 5. Create Card Data (in memory, not saved yet individually if we want to embed in box response) ---
+
+        // --- 6. Create Card and Element Documents in Database ---
         const generatedCardsDataForResponse = [];
         for (let i = 0; i < numCardsInDeck; i++) {
-            
-            const cardFrontElements = [
-                { elementId: uuidv4(), type: 'image', imageUrl: finalFrontImageToUse, x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx, zIndex: 0, rotation: 0 }
-            ];
-            const individualCardText = finalTextsForCards[i] || `Card ${i+1} Content`;
-            const tempCardId = new mongoose.Types.ObjectId(); // Pre-generate ID for linking elements
+            const tempCardId = new mongoose.Types.ObjectId();
+            const individualCardText = finalTextsForCards[i];
 
-            // Create FRONT Elements
+            // --- Define Element Data ---
             const cardFrontElementDocsData = [];
-            // Front Image Element Data
-            const frontImageElementData = {
+            const cardBackElementDocsData = [];
+
+            // Front Image Element
+            cardFrontElementDocsData.push({
                 cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: savedBox.userId, isFrontElement: true,
                 type: 'image', imageUrl: finalFrontImageToUse,
-                x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx, zIndex: 0, rotation: 0
-            };
-            cardFrontElementDocsData.push(frontImageElementData);
+                x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx, zIndex: 0
+            });
 
-            // Front Text Element Data
-            // ... (calculate textBlockX, Y, Width, Height) ...
-            const textContentForCard = finalTextsForCards[i] || `Card ${i+1} Text`;
-            const textBlockX = Math.round(defaultCardWidthPx * 0.1); // Simplified
+            // Front Text Element
+            const textBlockX = Math.round(defaultCardWidthPx * 0.1);
             const textBlockY = Math.round((defaultCardHeightPx - (defaultCardHeightPx * 0.45)) / 2);
             const textBlockWidth = Math.round(defaultCardWidthPx * 0.8);
             const textBlockHeight = Math.round(defaultCardHeightPx * 0.45);
-            cardFrontElements.push({
-                elementId: uuidv4(), type: 'text', content: textContentForCard, isGuestElement: isGuest,
-                x: textBlockX, y: textBlockY, width: textBlockWidth, height: textBlockHeight,
-                fontSize: "22px", fontFamily: "Arial", color: accentColorHex,
-                textAlign: "center", zIndex: 1, rotation: 0
-            });
-            const frontTextElementData = {
+            cardFrontElementDocsData.push({
                 cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: savedBox.userId, isFrontElement: true,
-                type: 'text', content: individualCardText, /* ...other text props... */
+                type: 'text', content: individualCardText,
                 x: textBlockX, y: textBlockY, width: textBlockWidth, height: textBlockHeight,
                 fontSize: "22px", fontFamily: "Arial", color: accentColorHex, textAlign: "center", zIndex: 1
-            };
-            cardFrontElementDocsData.push(frontTextElementData);
-            
-            // Create BACK Elements
-            const cardBackElementDocsData = [];
+            });
+
+            // Back Image Element (if provided)
             if (cardBackImageDataUri) {
                 cardBackElementDocsData.push({
-                    cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: savedBox.userId, isFrontElement: false, // Mark as back
+                    cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: savedBox.userId, isFrontElement: false,
                     type: 'image', imageUrl: cardBackImageDataUri,
-                    x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx, zIndex: 0, rotation: 0
+                    x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx, zIndex: 0
                 });
             }
 
-            // Save all elements for this card (front and back)
-            // For performance, can use Element.insertMany() if creating many at once
-            let savedFrontElements = [];
-            if (cardFrontElementDocsData.length > 0) {
-                savedFrontElements = await Element.insertMany(cardFrontElementDocsData);
-            }
-            let savedBackElements = [];
-            if (cardBackElementDocsData.length > 0) {
-                savedBackElements = await Element.insertMany(cardBackElementDocsData);
-            }
-            
+            // --- Save Elements ---
+            const savedFrontElements = await Element.insertMany(cardFrontElementDocsData);
+            const savedBackElements = await Element.insertMany(cardBackElementDocsData);
+
+            // --- Create and Save Card ---
             const cardToSave = new Card({
-                _id: tempCardId, // Use the pre-generated ID
+                _id: tempCardId,
                 name: `${savedBox.name} - Card ${i + 1}`,
-                boxId: savedBox._id, userId: savedBox.userId,isGuestCard: isGuest, orderInBox: i,
-                widthPx: defaultCardWidthPx, heightPx: defaultCardHeightPx,
-                cardFrontElementIds: savedFrontElements.map(el => el._id), // Store IDs
-                cardBackElementIds: savedBackElements.map(el => el._id),   // Store IDs
+                boxId: savedBox._id,
+                userId: savedBox.userId,
+                isGuestCard: isGuest,
+                orderInBox: i,
+                widthPx: defaultCardWidthPx,
+                heightPx: defaultCardHeightPx,
+                cardFrontElementIds: savedFrontElements.map(el => el._id),
+                cardBackElementIds: savedBackElements.map(el => el._id),
                 metadata: {
                     aiFrontImagePromptUsed: imageGenPromptForStability,
-                    aiTextPromptUsed: textListPromptForGemini.split('\n\nData Items List:')[0], // Store just the request part
+                    aiTextPromptUsed: textListPromptForGemini,
                     frontImageSource: aiFrontImageGeneratedSuccessfully ? 'ai' : (fallbackFrontImageBase64DataUri ? 'frontend_fallback' : 'backend_placeholder'),
-                    imageGenerationStatus: imageGenError || (aiFrontImageGeneratedSuccessfully ? "AI Success" : "Used Fallback/Placeholder"),
-                    textGenerationStatus: textGenError || (textListGeneratedSuccessfully ? "Success" : "Failed/Placeholder")
+                    imageGenerationStatus: imageGenError || "Success",
+                    textGenerationStatus: textGenError || "Success"
                 }
             });
             const savedCard = await cardToSave.save();
-            
-            // For the response, populate the elements
+
+            // --- Prepare card for the final response object ---
             const cardForResponse = savedCard.toObject();
             cardForResponse.cardFrontElements = savedFrontElements.map(el => el.toObject());
             cardForResponse.cardBackElements = savedBackElements.map(el => el.toObject());
             generatedCardsDataForResponse.push(cardForResponse);
         }
 
-        // --- Construct and Send Final Response ---
+
+        // --- 7. Construct and Send Final Response ---
         const boxResponseObject = savedBox.toObject();
-        boxResponseObject.cards = generatedCardsDataForResponse; // Embed fully populated cards
+        boxResponseObject.cards = generatedCardsDataForResponse;
 
-        // Add flags to top-level data if preferred, or keep in metadata of box/cards
-        const responseData = { 
-            box: boxResponseObject, 
-            imageWasAIgenerated: aiFrontImageGeneratedSuccessfully, 
-            textListWasGenerated: textListGeneratedSuccessfully, 
-            rawText: generatedTextListData 
+        const responseData = {
+            box: boxResponseObject,
+            imageWasAIgenerated: aiFrontImageGeneratedSuccessfully,
+            textListWasGenerated: textListGeneratedSuccessfully,
+            rawText: generatedTextListData || ""
         };
-        successResponse(res, `Box "${savedBox.name}" and ${numCardsInDeck} cards created.`, responseData, 201);
 
-    } catch (error) {
+        successResponse(res, `Box "${savedBox.name}" and ${generatedCardsDataForResponse.length} cards created.`, responseData, 201);
+
+     } catch (error) {
         console.error("Error in generateNewDeckAndBox Controller:", error.message, error.stack);
         errorResponse(res, "Error generating new deck and box.", 500, "DECK_GENERATION_FAILED", error.message);
-    }
+     }
     console.log("CONTROLLER: generateNewDeckAndBox finished.");
 };
 
