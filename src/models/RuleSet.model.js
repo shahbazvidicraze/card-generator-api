@@ -9,10 +9,10 @@ const RuleSchema = new mongoose.Schema({
 });
 
 const RuleSetSchema = new mongoose.Schema({
-    name: { 
-        type: String, 
-        required: [true, 'A name for the ruleset is required.'], 
-        trim: true 
+    prompt_for_rules: {
+        type: String,
+        required: [true, 'A prompt for the rules is required.'],
+        trim: true
     },
     userId: { 
         type: mongoose.Schema.Types.ObjectId,

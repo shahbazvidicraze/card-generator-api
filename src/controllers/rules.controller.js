@@ -48,30 +48,39 @@ function errorResponse(res, message, statusCode = 500, details = null) {
 // @access  Private
 exports.createRuleSet = async (req, res) => {
     try {
-        const { name, difficulty_level, game_roles, prompt_for_rules } = req.body;
+        // Updated destructuring: 'name' is gone, 'prompt_for_rules' is used directly.
+        const { prompt_for_rules, difficulty_level, game_roles } = req.body;
         
-        // Handle optional authentication
         const userId = req.user ? req.user.id : null;
         const isGuest = !userId;
 
-        if (!name || !difficulty_level || !game_roles || !prompt_for_rules) {
-            return errorResponse(res, 'Name, difficulty, roles, and a prompt are required.', 400);
+        // Updated validation to check for prompt_for_rules instead of name.
+        if (!prompt_for_rules) {
+            return errorResponse(res, 'A prompt for ruleset is required.', 400);
         }
 
-        // 1. Generate rules text from AI
+        // Updated validation to check for prompt_for_rules instead of name.
+        if (!difficulty_level) {
+            return errorResponse(res, 'Difficulty level for ruleset is required.', 400);
+        }
+
+        // Updated validation to check for prompt_for_rules instead of name.
+        if (!game_roles) {
+            return errorResponse(res, 'No. of roles/players for ruleset is required.', 400);
+        }
+
+        // AI generation and parsing logic remains the same.
         const rulesPromptForGemini = `The game is: "${prompt_for_rules}". Generate rules based on this.`;
         const generatedRulesText = await aiService.generateTextWithGemini(rulesPromptForGemini, undefined, GAME_RULES_SYSTEM_INSTRUCTION);
-
-        // 2. Parse the text into structured data
         let parsedRulesData = parseRulesFromAiText(generatedRulesText);
         if (parsedRulesData.length === 0) {
             parsedRulesData.push({ heading: 'Fallback Objective', description: `The objective of the game is based on the theme: ${prompt_for_rules}.`, status: 'enabled' });
         }
         
-        // 3. Create and save the new RuleSet
+        // Updated object for the new schema.
         const newRuleSet = new RuleSet({
-            name,
-            userId, 
+            prompt_for_rules,
+            userId,
             isGuestRuleSet: isGuest,
             difficulty_level,
             game_roles,
@@ -82,9 +91,6 @@ exports.createRuleSet = async (req, res) => {
         successResponse(res, 'New RuleSet created successfully.', savedRuleSet, 201);
 
     } catch (error) {
-        if (error.code === 11000) { // Handle duplicate name error
-            return errorResponse(res, 'A ruleset with this name already exists for your account.', 409);
-        }
         errorResponse(res, 'Server error while creating RuleSet.', 500, error.message);
     }
 };
