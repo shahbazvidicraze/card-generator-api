@@ -1,4 +1,3 @@
-// src/controllers/template.controller.js
 const Template = require('../models/Template.model');
 
 // --- Standard Response Helpers ---
@@ -11,30 +10,40 @@ function errorResponse(res, message, statusCode = 500, details = null) {
 
 // @desc    Create a new template
 // @route   POST /api/templates
-// @access  Public (for now)
+// @access  Public
 exports.createTemplate = async (req, res) => {
     try {
-        const { name, description, themePrompt, image } = req.body;
-        if (!name || !themePrompt || !image) {
-            return errorResponse(res, 'Name, themePrompt, and image are required fields.', 400);
+        const { templateName, description, themePrompt } = req.body;
+        const imageFile = req.file;
+
+        if (!templateName || !themePrompt || !imageFile) {
+            return errorResponse(res, 'templateName, themePrompt, and image are required fields.', 400);
         }
-        const newTemplate = await Template.create({ name, description, themePrompt, image });
+
+        const existing = await Template.findOne({ templateName });
+        if (existing) {
+            return errorResponse(res, 'A template with this templateName already exists.', 409);
+        }
+
+        const newTemplate = await Template.create({
+            templateName,
+            description,
+            themePrompt,
+            image: `/uploads/templates/${imageFile.filename}`
+        });
+
         successResponse(res, 'Template created successfully.', newTemplate, 201);
     } catch (error) {
-        if (error.code === 11000) {
-            return errorResponse(res, 'A template with this name already exists.', 409);
-        }
         errorResponse(res, 'Error creating template.', 500, error.message);
     }
 };
 
 // @desc    Get all templates
 // @route   GET /api/templates
-// @access  Public (for now)
+// @access  Public
 exports.getAllTemplates = async (req, res) => {
     try {
-        // Sort by most used first, then alphabetically
-        const templates = await Template.find().sort({ uses_count: -1, name: 1 });
+        const templates = await Template.find().sort({ templateName: 1 });
         successResponse(res, 'Templates retrieved successfully.', templates);
     } catch (error) {
         errorResponse(res, 'Error retrieving templates.', 500, error.message);
@@ -43,7 +52,7 @@ exports.getAllTemplates = async (req, res) => {
 
 // @desc    Get a single template by ID
 // @route   GET /api/templates/:templateId
-// @access  Public (for now)
+// @access  Public
 exports.getTemplateById = async (req, res) => {
     try {
         const template = await Template.findById(req.params.templateId);
@@ -58,16 +67,32 @@ exports.getTemplateById = async (req, res) => {
 
 // @desc    Update a template
 // @route   PUT /api/templates/:templateId
-// @access  Public (for now)
+// @access  Public
 exports.updateTemplate = async (req, res) => {
     try {
-        const updatedTemplate = await Template.findByIdAndUpdate(req.params.templateId, req.body, {
-            new: true,
-            runValidators: true
-        });
+        const { templateName, description, themePrompt } = req.body;
+        const imageFile = req.file;
+
+        const updateData = {
+            templateName,
+            description,
+            themePrompt,
+        };
+
+        if (imageFile) {
+            updateData.image = `/uploads/templates/${imageFile.filename}`;
+        }
+
+        const updatedTemplate = await Template.findByIdAndUpdate(
+            req.params.templateId,
+            updateData,
+            { new: true, runValidators: true }
+        );
+
         if (!updatedTemplate) {
             return errorResponse(res, 'Template not found.', 404);
         }
+
         successResponse(res, 'Template updated successfully.', updatedTemplate);
     } catch (error) {
         errorResponse(res, 'Error updating template.', 500, error.message);
@@ -76,7 +101,7 @@ exports.updateTemplate = async (req, res) => {
 
 // @desc    Delete a template
 // @route   DELETE /api/templates/:templateId
-// @access  Public (for now)
+// @access  Public
 exports.deleteTemplate = async (req, res) => {
     try {
         const template = await Template.findByIdAndDelete(req.params.templateId);
@@ -91,13 +116,12 @@ exports.deleteTemplate = async (req, res) => {
 
 // @desc    Export all templates as JSON
 // @route   GET /api/templates/export/json
-// @access  Public (for now)
+// @access  Public
 exports.exportTemplates = async (req, res) => {
     try {
         const templates = await Template.find().lean();
-        // Remove MongoDB-specific fields for a clean export
         const cleanedTemplates = templates.map(({ _id, __v, createdAt, updatedAt, ...rest }) => rest);
-        
+
         res.setHeader('Content-Disposition', 'attachment; filename="templates.json"');
         res.setHeader('Content-Type', 'application/json');
         res.status(200).json({ templates: cleanedTemplates });
@@ -108,30 +132,27 @@ exports.exportTemplates = async (req, res) => {
 
 // @desc    Import templates from a JSON file
 // @route   POST /api/templates/import/json
-// @access  Public (for now)
+// @access  Public
 exports.importTemplates = async (req, res) => {
     try {
         const { templates } = req.body;
         if (!templates || !Array.isArray(templates)) {
             return errorResponse(res, 'Request body must contain a "templates" array.', 400);
         }
-        
-        // Use insertMany for bulk creation. ordered:false will attempt to insert all documents, even if some fail.
+
         const result = await Template.insertMany(templates, { ordered: false });
-        
+
         successResponse(res, `${result.length} templates successfully imported.`, {
             successfulImports: result.length,
             totalAttempted: templates.length
         });
     } catch (error) {
-        // insertMany with ordered:false still throws an error, but it's a BulkWriteError
-        // that contains information about which documents succeeded.
         if (error.name === 'BulkWriteError') {
-             return successResponse(res, `Import completed with some errors. ${error.result.nInserted} templates were successfully imported.`, {
+            return successResponse(res, `Import completed with some errors. ${error.result.nInserted} templates were successfully imported.`, {
                 successfulImports: error.result.nInserted,
                 totalAttempted: req.body.templates.length,
                 errors: error.result.getWriteErrors()
-             });
+            });
         }
         errorResponse(res, 'Error importing templates.', 500, error.message);
     }

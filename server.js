@@ -6,6 +6,7 @@ const cors = require('cors');
 const connectDB = require('./src/config/db');
 const mainRouter = require('./src/routes'); // We'll create this soon
 const authRoutes = require('./src/routes/auth.routes'); // Import auth routes
+const userRoutes = require('./src/routes/user.routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,6 +26,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 // API Routes
 app.use('/api', mainRouter); // Mount the main router at /api
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+
 
 // Basic root route for testing
 app.get('/', (req, res) => {
