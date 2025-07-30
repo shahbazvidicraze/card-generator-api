@@ -15,7 +15,7 @@ exports.getQuote = async (req, res) => {
             return errorResponse(res, "Shipping details must include countryCode, zipCode, and city.", 400);
         }
         const { pricePerDeckForCards, pricePerDeckForBox } = await pricingService.calculatePrice(cardType, deckQuantity, cardsPerDeck);
-        const packageDetails = { weight: 1.5, length: 20, width: 15, height: 10 }; 
+        const packageDetails = { weight: 1.5, length: 20, width: 15, height: 10 };
         const shippingOptions = await dhlService.getShippingRates(shippingDetails, packageDetails);
         if (shippingOptions.length === 0) {
             return errorResponse(res, "Could not find any shipping options for the provided address.", 404);
@@ -36,12 +36,12 @@ exports.getQuote = async (req, res) => {
                 tax: { label: 'Tax', value: parseFloat(taxAmount.toFixed(2)) },
                 total: { label: 'Total', value: parseFloat(totalCost.toFixed(2)) }
             },
-            shippingOptions 
+            shippingOptions
         };
         successResponse(res, 'Quote calculated successfully', quote);
     } catch (error) {
         console.error("Error in getQuote Controller:", error.message);
-        errorResponse(res, error.message, 400); 
+        errorResponse(res, error.message, 400);
     }
 };
 
@@ -80,7 +80,7 @@ exports.createOrder = async (req, res) => {
         }
 
         const orderId = await orderService.generateNextOrderId();
-        
+
         // The full shippingDetails object, including countryCode, is now saved.
         const newOrder = new Order({
             orderId,

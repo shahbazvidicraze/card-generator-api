@@ -83,16 +83,16 @@ exports.updateOrderStatus = async (req, res) => {
                 const { trackingNumber } = await dhlService.createShipment(order);
                 order.dhlTrackingNumber = trackingNumber;
                 console.log(`Shipment created for ${orderId}. Tracking #: ${trackingNumber}`);
-                
+
                 // You could trigger a "shipping confirmation" email to the user here.
             } else {
                 console.log(`Order ${orderId} is already marked as shipped with tracking number.`);
             }
         }
-        
+
         order.statusHistory.push({ status, date: new Date() });
         const updatedOrder = await order.save();
-        
+
         successResponse(res, `Order status updated to ${status}.`, updatedOrder);
     } catch (error) {
         // Specifically handle errors from the DHL service
@@ -135,10 +135,10 @@ exports.generateOrderPdf = async (req, res) => {
         const orderId = decodeURIComponent(req.params.orderId);
         const order = await Order.findOne({ orderId });
         if (!order) return errorResponse(res, "Order not found.", 404);
-        
+
         const message = `Backend PDF generation for order ${orderId} has been initiated.`;
         successResponse(res, message, { orderId });
     } catch (error) {
-         errorResponse(res, "Failed to generate PDF.", 500, "PDF_GENERATION_FAILED", error.message);
+        errorResponse(res, "Failed to generate PDF.", 500, "PDF_GENERATION_FAILED", error.message);
     }
 };

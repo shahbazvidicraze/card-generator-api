@@ -2,8 +2,8 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
-const { 
-    DHL_API_KEY, 
+const {
+    DHL_API_KEY,
     DHL_API_SECRET,
     DHL_API_RATES_ENDPOINT,
     DHL_API_SHIPMENTS_ENDPOINT,
@@ -42,9 +42,9 @@ async function getShippingRates(shippingDetails, packageDetails) {
         requestEstimatedDeliveryDate: true,
         estimatedDeliveryDateType: 'QDDF'
     });
-    
+
     const finalUrl = `${DHL_API_RATES_ENDPOINT}?${params.toString()}`;
-    
+
     try {
         const response = await axios.get(finalUrl, { headers });
 
@@ -55,7 +55,7 @@ async function getShippingRates(shippingDetails, packageDetails) {
                 currency: product.totalPrice[0]?.currency,
                 estimatedDelivery: product.deliveryCapabilities?.estimatedDeliveryDateAndTime || null
             }));
-            
+
             return simplifiedRates;
         }
         return [];
@@ -79,13 +79,13 @@ async function createShipment(order) {
     }
 
     const credentials = Buffer.from(`${DHL_API_KEY}:${DHL_API_SECRET}`).toString('base64');
-    const headers = { 
+    const headers = {
         'Authorization': `Basic ${credentials}`,
         'Content-Type': 'application/json'
     };
 
     const isCustomsDeclarable = order.shippingDetails.countryCode !== SHIPPER_COUNTRY_CODE;
-    
+
     const requestBody = {
         plannedShippingDateAndTime: new Date().toISOString().slice(0, 19) + " GMT+01:00",
         pickup: { isRequested: false },
@@ -165,7 +165,7 @@ async function createShipment(order) {
     try {
         console.log(`Creating DHL shipment for order: ${order.orderId}`);
         const response = await axios.post(DHL_API_SHIPMENTS_ENDPOINT, requestBody, { headers });
-        
+
         const trackingNumber = response.data?.shipmentTrackingNumber;
         const shippingLabelData = response.data?.documents?.[0]?.content;
 
