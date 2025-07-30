@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="56e28869-013c-4c64-b9fd-d33e18aa8141" name="Card Game - Remote">
+        <fileTransfer rootFolder="/home/ubuntu/card-generator-api" accessType="SFTP" host="52.203.31.162" port="22" sshConfigId="742f8d75-3b0f-4f49-bf8b-b358e5b35fc4" sshConfig="ubuntu@52.203.31.162:22 key" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

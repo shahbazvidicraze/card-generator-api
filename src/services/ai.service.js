@@ -9,6 +9,12 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL;
 const GEMINI_API_HOST = 'https://generativelanguage.googleapis.com/v1beta';
 
+// --- Pixian Constants (New) ---
+const PIXIAN_API_KEY = process.env.PIXIAN_API_KEY;
+const PIXIAN_API_SECRET = process.env.PIXIAN_API_SECRET;
+const PIXIAN_API_HOST = 'https://api.pixian.ai/api/v2/remove-background';
+
+
 async function generateImageWithStabilityAI_V2(prompt, requestedOutputFormat = 'png', aspectRatio = '1:1') {
     // Ensure requestedOutputFormat is a safe, known value for the data URI
     const validOutputFormat = ['png', 'jpeg', 'webp'].includes(requestedOutputFormat.toLowerCase()) ? requestedOutputFormat.toLowerCase() : 'png';
@@ -217,8 +223,64 @@ async function generateTextWithGemini(promptText, model = GEMINI_TEXT_MODEL, sys
     }
 }
 
+/**
+ * Removes the background from an image using the Pixian API.
+ * @param {Buffer} imageBuffer - The buffer of the original image.
+ * @returns {Promise<string|null>} A promise that resolves to a Base64 data URI of the transparent PNG, or null on failure.
+ */
+async function removeBackgroundWithPixian(imageBuffer) {
+    if (!PIXIAN_API_KEY || !PIXIAN_API_SECRET) {
+        console.error('Pixian API key or secret not configured. Skipping background removal.');
+        return null;
+    }
+    if (!imageBuffer || imageBuffer.length === 0) {
+        console.warn('Received empty buffer for background removal. Skipping.');
+        return null;
+    }
+
+    const formData = new FormData();
+    formData.append('image', imageBuffer, 'image-to-clean.png');
+    formData.append('test', 'true'); // For Test Devolepment
+
+    try {
+        console.log('Calling Pixian API to remove background...');
+        const response = await axios.post(PIXIAN_API_HOST, formData, {
+            responseType: 'arraybuffer',
+            headers: {
+                ...formData.getHeaders(),
+            },
+            // This 'auth' block correctly uses your credentials for Basic HTTP Auth
+            auth: {
+                username: PIXIAN_API_KEY,
+                password: PIXIAN_API_SECRET
+            },
+            timeout: 60000,
+        });
+
+        if (response.status === 200) {
+            const cleanedImageBuffer = Buffer.from(response.data);
+            const base64String = cleanedImageBuffer.toString('base64');
+            console.log('Pixian background removal successful.');
+            return `data:image/png;base64,${base64String}`;
+        }
+        return null;
+    } catch (error) {
+        console.error('--- Pixian API Call Failed ---');
+        if (axios.isAxiosError(error) && error.response) {
+            const errorText = Buffer.from(error.response.data).toString('utf-8');
+            console.error(`Pixian API Error (${error.response.status}): ${errorText}`);
+        } else {
+            console.error(error.message);
+        }
+        return null;
+    }
+}
+
+
+
 module.exports = {
     generateImageWithStabilityAI: generateImageWithStabilityAI_V2,
     generateImageWithStabilityAI_V2,
     generateTextWithGemini,
+    removeBackgroundWithPixian,
 };

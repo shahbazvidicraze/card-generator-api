@@ -28,11 +28,12 @@ const ElementSchemaDef = {
     lineHeight: { type: String, default: 'normal'},
     letterSpacing: {type: String, default: 'normal'},
     textDecoration: {type: String, default: 'none'},
+    borderRadius: { type: Number, default: 0 },
     shapeType: { type: String, enum: ['rectangle', 'circle', 'triangle'] }, // if you have 'shape' type
     fillColor: { type: String, default: '#cccccc' },
     strokeColor: { type: String, default: '#000000' },
     strokeWidth: { type: Number, default: 1 },
-    customAttributes: { type: Map, of: String }
+    customAttributes: { type: Map, of: String },
 };
 
 const ElementSchema = new mongoose.Schema(ElementSchemaDef, { timestamps: true });

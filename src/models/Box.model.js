@@ -11,6 +11,14 @@ const BoxSchema = new mongoose.Schema({
         required: false,
         index: true
     },
+    // --- NEW FIELD FOR PUBLIC SHARING ---
+    // This flag determines if the box can be viewed via a public link.
+    // It is 'false' by default, meaning all user projects are private until shared.
+    isPublic: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
     isGuestBox: { // Flag to indicate if it's a guest-created box
         type: Boolean,
         default: true

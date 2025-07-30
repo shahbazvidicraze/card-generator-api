@@ -1,3 +1,4 @@
+// src/controllers/template.controller.js
 const Template = require('../models/Template.model');
 
 // --- Standard Response Helpers ---
@@ -10,30 +11,33 @@ function errorResponse(res, message, statusCode = 500, details = null) {
 
 // @desc    Create a new template
 // @route   POST /api/templates
-// @access  Public
+// @access  Public (for now) / Admin
 exports.createTemplate = async (req, res) => {
     try {
-        const { templateName, description, themePrompt } = req.body;
-        const imageFile = req.file;
+        const { name, description, themePrompt, image, paidType, price } = req.body;
 
-        if (!templateName || !themePrompt || !imageFile) {
-            return errorResponse(res, 'templateName, themePrompt, and image are required fields.', 400);
+        if (!name || !themePrompt || !image) {
+            return errorResponse(res, 'Name, themePrompt, and image are required fields.', 400);
         }
 
-        const existing = await Template.findOne({ templateName });
-        if (existing) {
-            return errorResponse(res, 'A template with this templateName already exists.', 409);
+        const templateData = { name, description, themePrompt, image, paidType, price };
+
+        // Validation: If it's a premium template, it must have a price > 0.
+        // The model's pre-save hook will handle setting price to 0 for free templates.
+        if (templateData.paidType === 'premium' && (!templateData.price || templateData.price <= 0)) {
+            return errorResponse(res, 'A positive price is required for premium templates.', 400);
         }
 
-        const newTemplate = await Template.create({
-            templateName,
-            description,
-            themePrompt,
-            image: `/uploads/templates/${imageFile.filename}`
-        });
-
+        const newTemplate = await Template.create(templateData);
         successResponse(res, 'Template created successfully.', newTemplate, 201);
     } catch (error) {
+        if (error.code === 11000) {
+            return errorResponse(res, 'A template with this name already exists.', 409);
+        }
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(val => val.message);
+            return errorResponse(res, messages.join(', '), 400);
+        }
         errorResponse(res, 'Error creating template.', 500, error.message);
     }
 };
@@ -43,7 +47,8 @@ exports.createTemplate = async (req, res) => {
 // @access  Public
 exports.getAllTemplates = async (req, res) => {
     try {
-        const templates = await Template.find().sort({ templateName: 1 });
+        // Sort by most used first, then alphabetically
+        const templates = await Template.find().sort({ uses_count: -1, name: 1 });
         successResponse(res, 'Templates retrieved successfully.', templates);
     } catch (error) {
         errorResponse(res, 'Error retrieving templates.', 500, error.message);
@@ -67,41 +72,47 @@ exports.getTemplateById = async (req, res) => {
 
 // @desc    Update a template
 // @route   PUT /api/templates/:templateId
-// @access  Public
+// @access  Public (for now) / Admin
 exports.updateTemplate = async (req, res) => {
     try {
-        const { templateName, description, themePrompt } = req.body;
-        const imageFile = req.file;
+        const updates = req.body;
 
-        const updateData = {
-            templateName,
-            description,
-            themePrompt,
-        };
-
-        if (imageFile) {
-            updateData.image = `/uploads/templates/${imageFile.filename}`;
+        // --- UPDATED LOGIC ---
+        // If changing to 'premium', validate the price.
+        if (updates.paidType === 'premium' && (!updates.price || updates.price <= 0)) {
+            return errorResponse(res, 'A positive price is required when setting a template to premium.', 400);
+        }
+        // If changing to 'free', explicitly set price to 0 in the update payload.
+        if (updates.paidType === 'free') {
+            updates.price = 0;
         }
 
         const updatedTemplate = await Template.findByIdAndUpdate(
             req.params.templateId,
-            updateData,
-            { new: true, runValidators: true }
+            { $set: updates }, // Use $set to apply all updates
+            {
+                new: true,
+                runValidators: true,
+                context: 'query' // Important for some validators on update
+            }
         );
 
         if (!updatedTemplate) {
             return errorResponse(res, 'Template not found.', 404);
         }
-
         successResponse(res, 'Template updated successfully.', updatedTemplate);
     } catch (error) {
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(val => val.message);
+            return errorResponse(res, messages.join(', '), 400);
+        }
         errorResponse(res, 'Error updating template.', 500, error.message);
     }
 };
 
 // @desc    Delete a template
 // @route   DELETE /api/templates/:templateId
-// @access  Public
+// @access  Public (for now) / Admin
 exports.deleteTemplate = async (req, res) => {
     try {
         const template = await Template.findByIdAndDelete(req.params.templateId);
@@ -114,12 +125,14 @@ exports.deleteTemplate = async (req, res) => {
     }
 };
 
+// ... (export and import functions remain the same) ...
 // @desc    Export all templates as JSON
 // @route   GET /api/templates/export/json
-// @access  Public
+// @access  Public (for now)
 exports.exportTemplates = async (req, res) => {
     try {
         const templates = await Template.find().lean();
+        // Remove MongoDB-specific fields for a clean export
         const cleanedTemplates = templates.map(({ _id, __v, createdAt, updatedAt, ...rest }) => rest);
 
         res.setHeader('Content-Disposition', 'attachment; filename="templates.json"');
@@ -132,7 +145,7 @@ exports.exportTemplates = async (req, res) => {
 
 // @desc    Import templates from a JSON file
 // @route   POST /api/templates/import/json
-// @access  Public
+// @access  Public (for now)
 exports.importTemplates = async (req, res) => {
     try {
         const { templates } = req.body;
@@ -140,6 +153,7 @@ exports.importTemplates = async (req, res) => {
             return errorResponse(res, 'Request body must contain a "templates" array.', 400);
         }
 
+        // Use insertMany for bulk creation. ordered:false will attempt to insert all documents, even if some fail.
         const result = await Template.insertMany(templates, { ordered: false });
 
         successResponse(res, `${result.length} templates successfully imported.`, {
@@ -147,6 +161,8 @@ exports.importTemplates = async (req, res) => {
             totalAttempted: templates.length
         });
     } catch (error) {
+        // insertMany with ordered:false still throws an error, but it's a BulkWriteError
+        // that contains information about which documents succeeded.
         if (error.name === 'BulkWriteError') {
             return successResponse(res, `Import completed with some errors. ${error.result.nInserted} templates were successfully imported.`, {
                 successfulImports: error.result.nInserted,

@@ -4,7 +4,11 @@ const {
     getUser,
     createUser,
     updateUser,
-    deleteUser
+    deleteUser,
+    // --- IMPORT NEW CONTROLLERS ---
+    banUser,
+    unbanUser,
+    suspendUser
 } = require('../controllers/user.controller');
 const { protect, authorize } = require('../middleware/auth.middleware');
 
@@ -22,5 +26,10 @@ router.route('/:id')
     .get(getUser)
     .put(updateUser)
     .delete(deleteUser);
+
+// --- NEW ADMIN ROUTES FOR USER STATUS MANAGEMENT ---
+router.put('/:id/ban', banUser);
+router.put('/:id/unban', unbanUser);
+router.put('/:id/suspend', suspendUser);
 
 module.exports = router;

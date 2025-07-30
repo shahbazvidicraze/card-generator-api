@@ -1,39 +1,37 @@
-// src/routes/box.routes.js
 const express = require('express');
 const router = express.Router();
 const boxController = require('../controllers/box.controller');
-const authMiddleware = require('../middleware/auth.middleware');
+const { protect } = require('../middleware/auth.middleware'); // Use the correct import name
 
-// --- Box Creation (Public, but controller handles optional auth) ---
-// Create a new Box with an initial deck of cards
-router.post('/create-with-deck', boxController.generateNewDeckAndBox); // Public, controller handles optional auth
-// Create an empty Box
-router.post('/', boxController.createBox); // Public, controller handles optional auth
+// --- NEW PUBLIC ROUTE for viewing a shared box ---
+// This route MUST be defined before the other /:boxId routes to be matched correctly.
+// It has no 'protect' middleware, so anyone can call it.
+router.get('/view-box/:boxId', boxController.getPublicBox);
 
-// --- Claiming a Box (Protected) ---
-router.post('/:boxId/claim', authMiddleware.protect, boxController.claimBox);
+// --- Box Creation (unchanged) ---
+router.post('/create-with-deck', boxController.generateNewDeckAndBox);
+router.post('/', boxController.createBox);
 
-// --- Reading Boxes ---
-// Get all boxes for THE AUTHENTICATED user
-router.get('/', authMiddleware.protect, boxController.getUserBoxes);
+// --- Claiming a Box (unchanged, protected) ---
+router.post('/:boxId/claim', protect, boxController.claimBox);
 
-// Get a specific box by its ID
-// This is public for guest boxes, but controller will enforce ownership for non-guest boxes if a token is present.
-// If a token IS present, the controller should also check ownership if the box is NOT a guest box.
-router.get('/:boxId', boxController.getBoxById); // Controller logic will handle guest vs owned access
+// --- Reading User's Boxes (unchanged, protected) ---
+router.get('/', protect, boxController.getUserBoxes);
+router.get('/:boxId/export/json', protect, boxController.exportBoxAsJson);
 
-router.get('/:boxId/export/json', authMiddleware.protect, boxController.exportBoxAsJson);
-// --- Modifying/Deleting Box and Its Elements (Protected) ---
-// Update box details
-router.put('/:boxId', authMiddleware.protect, boxController.updateBox);
-// Delete a box
-router.delete('/:boxId', authMiddleware.protect, boxController.deleteBox);
+// --- NEW PROTECTED ROUTE for toggling the public status ---
+// Only the authenticated owner can access this.
+router.put('/:boxId/toggle-public', protect, boxController.togglePublicStatus);
 
-// Add an element to a box's design
-router.post('/:boxId/elements', authMiddleware.protect, boxController.addBoxElement);
-// Update an element on a box's design
-router.put('/:boxId/elements/:elementId', authMiddleware.protect, boxController.updateBoxElement);
-// Delete an element from a box's design
-router.delete('/:boxId/elements/:elementId', authMiddleware.protect, boxController.deleteBoxElement);
+// --- Modifying/Deleting Box (unchanged, protected) ---
+router.put('/:boxId', protect, boxController.updateBox);
+router.delete('/:boxId', protect, boxController.deleteBox);
+router.post('/:boxId/elements', protect, boxController.addBoxElement);
+router.put('/:boxId/elements/:elementId', protect, boxController.updateBoxElement);
+router.delete('/:boxId/elements/:elementId', protect, boxController.deleteBoxElement);
+
+// --- Reading a specific box (unchanged) ---
+// This is the route for when an owner views their own box. It can stay last.
+router.get('/:boxId', boxController.getBoxById);
 
 module.exports = router;

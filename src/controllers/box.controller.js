@@ -8,21 +8,16 @@ const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken'); // For optional token check
 const User = require('../models/User.model'); // For optional token check
 const RuleSet = require('../models/RuleSet.model');
+const SystemSetting = require('../models/SystemSetting.model.js');
 
-// --- NEW CONSTANT for Game Rules AI Prompt ---
-const GAME_RULES_SYSTEM_INSTRUCTION = `
-You are a game design assistant. Your task is to generate a set of core game rules based on a user's prompt for a card game.
-- The output MUST follow this strict format: Each rule is a heading on its own line, followed by a description in parentheses on the next line.
-- Do NOT include any conversational text, introductions, summaries, or any text outside of this heading/description format.
-- Do NOT number the headings.
-- Example Output Format:
-Heading One
-(Description for rule one goes here.)
-Heading Two
-(Description for rule two goes here.)
-- Generate between 3 to 5 core rules.
-- The rules should be clear, concise, and suitable for the game described in the user's prompt.
-`;
+const { successResponse, errorResponse } = require('../utils/responseHandler');
+const { 
+    CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION, 
+    CARD_TITLE_SYSTEM_INSTRUCTION, 
+    ILLUSTRATION_IDEAS_SYSTEM_INSTRUCTION,
+    DECORATIVE_BACKGROUND_PROMPT_ADDITION,
+    DECORATIVE_ELEMENT_IDEAS_SYSTEM_INSTRUCTION
+  } = require('../constants/aiPrompts');
 
 // --- NEW HELPER FUNCTION for Parsing AI Rules ---
 function parseRulesFromAiText(rawText) {
@@ -52,27 +47,11 @@ function parseRulesFromAiText(rawText) {
     return rules;
 }
 
-// --- Constants (can be moved to a config file) ---
-const CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION = `
-You are a data generation assistant. Your ONLY task is to provide concise, raw data examples based on the user's request, suitable for populating fields on a card.
-- Output must be like problem-solving game.
-- Alway change scenarios and also don't include answers.
-- keep the questions basic and non-conceptual.
-- keep the game level to most basic.
-- Output ONLY the requested data items.
-- Each distinct data item should be on a new line.
-- Do NOT include any titles, headings, explanations, introductions, summaries, or conversational text (e.g., "Here are some examples:", "I hope this helps!").
-- If the user asks for "examples of X", provide only the examples of X, not a description of X.
-- If the user asks for "questions for Y", provide only the questions for Y.
-- If the user asks for "stats for Z", provide only the stats for Z.
-- Think of your output as directly filling a spreadsheet or a list on a game card.
-- Adhere strictly to these formatting and content rules.
-`;
 
 const DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL ="";
 
 // Helper function to find the closest supported aspect ratio string
-function getClosestSupportedAspectRatio(width, height, supportedRatios) {
+function getClosestSupportedAspectRatioOld(width, height, supportedRatios) {
     if (height === 0) return "1:1";
     const targetRatio = width / height;
     let closestRatioString = "1:1";
@@ -88,58 +67,77 @@ function getClosestSupportedAspectRatio(width, height, supportedRatios) {
     return closestRatioString;
 }
 
-// --- Standard Success Response ---
-function successResponse(res, message, data, statusCode = 200, metadata = null) {
-    const response = { success: true, message, data };
-    if (metadata) response.metadata = metadata;
-    res.status(statusCode).json(response);
+function getClosestSupportedAspectRatio(width, height, supportedRatios) {
+    if (!width || !height || height === 0) return "1:1"; // Default for invalid inputs
+
+    const targetRatioValue = width / height;
+    
+    // Use reduce to find the object with the smallest difference
+    const closestRatio = supportedRatios.reduce((prev, curr) => {
+        const prevDiff = Math.abs(prev.value - targetRatioValue);
+        const currDiff = Math.abs(curr.value - targetRatioValue);
+        return currDiff < prevDiff ? curr : prev;
+    });
+    
+    console.log(`Target ratio: ${targetRatioValue.toFixed(2)}, Chosen supported Stability AI ratio string: ${closestRatio.string}`);
+    return closestRatio.string;
 }
 
-// --- Standard Error Response ---
-function errorResponse(res, message, statusCode = 500, errorCode = null, details = null) {
-    const errorPayload = { details: details || message };
-    if (errorCode) errorPayload.code = errorCode;
-    res.status(statusCode).json({ success: false, message: errorPayload.details });
-}
-
+// --- THE COMPLETE, MERGED, AND FINAL DECK GENERATION FUNCTION ---
 exports.generateNewDeckAndBox = async (req, res) => {
-    console.log("BOX_CONTROLLER: generateNewDeckAndBox started.");
-     try {
+    console.log("BOX_CONTROLLER: generateNewDeckAndBox (v3 - Merged Logic) started.");
+    try {
         const {
-            boxName,
+            boxName, // Now optional
             boxDescription = "",
             userPrompt,
             genre = "Educational",
-            ruleSetId, // This is now optional
+            ruleSetId, // Optional ID for rule context
             accentColorHex = "#333333",
             defaultCardWidthPx = 315,
             defaultCardHeightPx = 440,
-            imageAspectRatioForDeck = null,
             imageOutputFormatForDeck = "png",
             numCardsInDeck = 1,
-            cardBackImageDataUri = null,
-            fallbackFrontImageBase64DataUri = null
+            fallbackBackgroundUri = null,
+            fallbackCharacterUris = [],
+            fallbackDecorativeUris = []
         } = req.body;
 
         // --- Optional Authentication ---
+        // const userId = req.user ? req.user.id : null;
+        // const isGuest = !userId;
         let userId = null;
         let isGuest = true;
-        if (req.user && req.user.id) {
-            userId = req.user.id;
-            isGuest = false;
+        let token;
+        // THIS IS A MANUAL AUTHENTICATION CHECK
+        if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+            token = req.headers.authorization.split(' ')[1];
+            try {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                const user = await User.findById(decoded.id);
+                if (user) {
+                    userId = user._id;
+                    isGuest = false; // <-- This line SHOULD run for an auth'd user
+                }
+            } catch (err) {
+                // If an error happens (e.g., expired token), it proceeds as a guest
+                console.log('Optional token check failed, proceeding as guest:', err.message);
+            }
         }
 
         // --- Validation ---
-        if (!boxName || !userPrompt) {
-            return errorResponse(res, "A box name and user prompt are required.", 400);
+        if (!userPrompt) {
+            return errorResponse(res, "A user prompt is required.", 400);
         }
 
-        // --- 1. Conditional RuleSet Logic ---
+        // --- PHASE 1: Conditional RuleSet & Box Name Logic ---
         let game_rules = null;
         let rulesContextString = "No specific rules provided.";
+        let finalBoxName = boxName;
 
-        // This entire block only runs if a ruleSetId is provided in the request.
+        // A) Handle optional RuleSet
         if (ruleSetId) {
+            // ... (Logic from your "old" method to fetch and validate the ruleset)
             if (!mongoose.Types.ObjectId.isValid(ruleSetId)) {
                 return errorResponse(res, "Invalid RuleSet ID format provided.", 400);
             }
@@ -147,7 +145,6 @@ exports.generateNewDeckAndBox = async (req, res) => {
             if (!ruleSet) {
                 return errorResponse(res, "RuleSet with the provided ID not found.", 404);
             }
-
             // Authorization Check for RuleSet
             if (isGuest && !ruleSet.isGuestRuleSet) {
                 return errorResponse(res, "Guests cannot use a private RuleSet.", 403);
@@ -155,14 +152,11 @@ exports.generateNewDeckAndBox = async (req, res) => {
             if (!isGuest && ruleSet.userId && ruleSet.userId.toString() !== userId.toString()) {
                 return errorResponse(res, "You are not authorized to use this RuleSet.", 403);
             }
-
-            // Populate game_rules object and context string from the found ruleset
             game_rules = {
                 difficulty_level: ruleSet.difficulty_level,
                 game_roles: ruleSet.game_roles,
-                rules_data: ruleSet.rules_data.map(r => ({ heading: r.heading, description: r.description, status: r.status }))
+                rules_data: ruleSet.rules_data.map(r => ({ ...r }))
             };
-
             rulesContextString = game_rules.rules_data
                 .filter(rule => rule.status === 'enabled')
                 .map(rule => `- ${rule.heading}: ${rule.description}`)
@@ -172,150 +166,306 @@ exports.generateNewDeckAndBox = async (req, res) => {
             console.log("No RuleSet ID provided, proceeding without rules context.");
         }
 
+        // B) Prepare AI "Brainstorming" prompts
+        const brainstormingPromises = [];
+        // Use the detailed context string in the prompt for card text
+        const textListPromptForGemini = `Game Context:\nThe game is about: "${userPrompt}".\nThe core rules are:\n${rulesContextString}\n\nUser Request:\nBased on the game context above, generate a list of ${numCardsInDeck} unique, concise problem-solving questions for game cards. Each item should be max 100 characters long.\n\nData Items List:`;
+        brainstormingPromises.push(aiService.generateTextWithGemini(textListPromptForGemini, undefined, CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION));
+        
+        // Only generate a box name if one wasn't provided
+        if (!finalBoxName) {
+            brainstormingPromises.push(aiService.generateTextWithGemini(userPrompt, undefined, CARD_TITLE_SYSTEM_INSTRUCTION));
+        } else {
+            brainstormingPromises.push(Promise.resolve(null)); // Placeholder to keep array order
+        }
+        brainstormingPromises.push(aiService.generateTextWithGemini(userPrompt, undefined, DECORATIVE_ELEMENT_IDEAS_SYSTEM_INSTRUCTION));
 
-        // --- 2. AI Prompt Preparation ---
-        // AI prompt will use detailed context if rules were provided, or generic text if not.
-        const textListPromptForGemini = `Game Context:\nThe game is about: "${userPrompt}".\nThe core rules are:\n${rulesContextString}\n\nUser Request:\nBased on the game context above, generate a list of ${numCardsInDeck} unique, concise data items for game cards. Each item should be max 100 characters long.\n\nData Items List:`;
-        const imageGenPromptForStability = userPrompt;
-
-        const supportedStabilityRatios = [ { string: "21:9", value: 21/9 }, { string: "16:9", value: 16/9 }, { string: "3:2", value: 3/2 }, { string: "5:4", value: 5/4 }, { string: "1:1", value: 1/1 }, { string: "4:5", value: 4/5 }, { string: "2:3", value: 2/3 }, { string: "9:16", value: 9/16 }, { string: "9:21", value: 9/21 }];
-        let finalAspectRatioForAI = getClosestSupportedAspectRatio(defaultCardWidthPx, defaultCardHeightPx, supportedStabilityRatios);
-        if (imageAspectRatioForDeck && supportedStabilityRatios.some(r => r.string === imageAspectRatioForDeck)) {
-            finalAspectRatioForAI = imageAspectRatioForDeck;
+        // --- PHASE 2: AI BRAINSTORMING (Parallel Execution) ---
+        const [ textListData, generatedTitle, decorativeIdeasText ] = await Promise.all(brainstormingPromises);
+        
+        // C) Finalize Box Name
+        if (!finalBoxName && generatedTitle) {
+            finalBoxName = generatedTitle.trim();
+        } else if (!finalBoxName) {
+            finalBoxName = "My Fun Game"; // Fallback name
         }
 
-        // --- 3. Call AI Services ---
-        let aiFrontImageDataUri, generatedTextListData;
-        let imageGenError = null, textGenError = null;
+        let textItemsArray = (textListData || '').split('\n').map(item => item.trim()).filter(Boolean);
+        while (textItemsArray.length < numCardsInDeck) { textItemsArray.push(`[Problem ${textItemsArray.length + 1}]`); }
+        
+        const decorativeIdeas = decorativeIdeasText ? decorativeIdeasText.split(',').map(s => s.trim()).filter(Boolean) : [];
+        const supportedRatios = [{ string: "2:3", value: 2/3 }, { string: "3:2", value: 3/2 }, { string: "1:1", value: 1/1 }];
+        const finalAspectRatioForAI = getClosestSupportedAspectRatio(defaultCardWidthPx, defaultCardHeightPx, supportedRatios);
 
-        const imagePromise = aiService.generateImageWithStabilityAI(imageGenPromptForStability, imageOutputFormatForDeck, finalAspectRatioForAI).catch(err => { imageGenError = err.message; return null; });
-        const textPromise = aiService.generateTextWithGemini(textListPromptForGemini, undefined, CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION).catch(err => { textGenError = err.message; return null; });
+        // --- PHASE 3: GATHER & REFINE SHARED ELEMENTS ---
+        let sharedBackgroundUri = fallbackBackgroundUri;
+        let initialDecorativeUris = fallbackDecorativeUris;
+        const canUseStabilityAI = !!process.env.STABILITY_API_KEY;
+        const canUseBgRemoval = !!process.env.PIXIAN_API_KEY;
 
-        [aiFrontImageDataUri, generatedTextListData] = await Promise.all([imagePromise, textPromise]);
-
-
-        // --- 4. Process AI Results ---
-        const aiFrontImageGeneratedSuccessfully = !!aiFrontImageDataUri;
-        const textListGeneratedSuccessfully = !!generatedTextListData;
-        const DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL = ""; // Define your placeholder if any
-
-        if (!aiFrontImageGeneratedSuccessfully && !textListGeneratedSuccessfully && !fallbackFrontImageBase64DataUri && !DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL) {
-            return res.status(502).json({ success: false, message: "Both AI failed, and no fallbacks were available." });
+        if (canUseStabilityAI) {
+            if (!sharedBackgroundUri) {
+                const backgroundPrompt = `A simple, clean, vibrant, colorful gradient background for a children's flashcard about "${userPrompt}". No objects, no text, no patterns.`;
+                sharedBackgroundUri = await aiService.generateImageWithStabilityAI(backgroundPrompt, imageOutputFormatForDeck, finalAspectRatioForAI).catch(e => null);
+            }
+            if (initialDecorativeUris.length === 0 && decorativeIdeas.length > 0) {
+                const decorativePromises = decorativeIdeas.map(idea => aiService.generateImageWithStabilityAI(`A single, cute, small cartoon ${idea}, sticker style.`, 'png', '1:1').catch(e => null));
+                initialDecorativeUris = (await Promise.all(decorativePromises)).filter(Boolean);
+            }
+        }
+        
+        let refinedDecorativeUris = [];
+        if (canUseBgRemoval && initialDecorativeUris.length > 0) {
+            const bgRemovalPromises = initialDecorativeUris.map(uri => aiService.removeBackgroundWithPixian(Buffer.from(uri.split(',')[1], 'base64')).catch(e => null));
+            refinedDecorativeUris = (await Promise.all(bgRemovalPromises)).filter(Boolean);
+            if (refinedDecorativeUris.length === 0) { // Fallback if all removals fail
+                refinedDecorativeUris = initialDecorativeUris;
+            }
+        } else {
+            refinedDecorativeUris = initialDecorativeUris;
         }
 
-        let finalFrontImageToUse = aiFrontImageGeneratedSuccessfully ? aiFrontImageDataUri : (fallbackFrontImageBase64DataUri || DEFAULT_BACKEND_PLACEHOLDER_IMAGE_URL);
-        const textItemsArray = (generatedTextListData || '').split('\n').map(item => item.trim()).filter(item => item.length > 0);
-        const finalTextsForCards = [];
-        for (let i = 0; i < numCardsInDeck; i++) {
-            finalTextsForCards.push(textItemsArray[i] || `[Placeholder Card Content ${i + 1}]`);
-        }
-
-
-        // --- 5. Create Box Document in Database ---
+        // --- PHASE 4: DATABASE ASSEMBLY ---
         const newBoxData = {
-            name: boxName.trim(),
-            description: boxDescription,
-            userId: userId,
-            isGuestBox: isGuest,
-            defaultCardWidthPx: defaultCardWidthPx,
-            defaultCardHeightPx: defaultCardHeightPx,
-            baseAISettings: { userPrompt, genre, accentColorHex, imageAspectRatio: finalAspectRatioForAI, imageOutputFormat: imageOutputFormatForDeck, cardBackImage: cardBackImageDataUri },
-            ruleSetId: ruleSetId || null,
-            game_rules: game_rules
+            name: finalBoxName.trim(), description: boxDescription, userId, isGuestBox: isGuest,
+            defaultCardWidthPx, defaultCardHeightPx,
+            baseAISettings: { userPrompt, genre, accentColorHex, imageAspectRatio: finalAspectRatioForAI, imageOutputFormat: imageOutputFormatForDeck },
+            ruleSetId: ruleSetId || null, // Store the linked ID
+            game_rules: game_rules // Store the embedded rules object
         };
         const savedBox = await new Box(newBoxData).save();
         console.log("BOX_CONTROLLER: Box saved, ID:", savedBox._id);
 
-
-        // --- 6. Create Card and Element Documents in Database ---
         const generatedCardsDataForResponse = [];
         for (let i = 0; i < numCardsInDeck; i++) {
-            const tempCardId = new mongoose.Types.ObjectId();
-            const individualCardText = finalTextsForCards[i];
-
-            // --- Define Element Data ---
-            const cardFrontElementDocsData = [];
-            const cardBackElementDocsData = [];
-
-            // Front Image Element
-            cardFrontElementDocsData.push({
-                cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: savedBox.userId, isFrontElement: true,
-                type: 'image', imageUrl: finalFrontImageToUse,
-                x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx, zIndex: 0
-            });
-
-            // Front Text Element
-            const textBlockX = Math.round(defaultCardWidthPx * 0.1);
-            const textBlockY = Math.round((defaultCardHeightPx - (defaultCardHeightPx * 0.45)) / 2);
-            const textBlockWidth = Math.round(defaultCardWidthPx * 0.8);
-            const textBlockHeight = Math.round(defaultCardHeightPx * 0.45);
-            cardFrontElementDocsData.push({
-                cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: savedBox.userId, isFrontElement: true,
-                type: 'text', content: individualCardText,
-                x: textBlockX, y: textBlockY, width: textBlockWidth, height: textBlockHeight,
-                fontSize: "22px", fontFamily: "Arial", color: accentColorHex, textAlign: "center", zIndex: 1
-            });
-
-            // Back Image Element (if provided)
-            if (cardBackImageDataUri) {
-                cardBackElementDocsData.push({
-                    cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: savedBox.userId, isFrontElement: false,
-                    type: 'image', imageUrl: cardBackImageDataUri,
-                    x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx, zIndex: 0
-                });
+            // This entire loop is from your advanced generation method
+            const individualCardText = textItemsArray[i];
+            let initialCharUris = i < fallbackCharacterUris.length ? [fallbackCharacterUris[i]] : [];
+            
+            if (canUseStabilityAI && initialCharUris.length === 0) {
+                const charIdeasText = await aiService.generateTextWithGemini(`Text: "${individualCardText}"`, undefined, ILLUSTRATION_IDEAS_SYSTEM_INSTRUCTION);
+                const charIdeas = charIdeasText ? charIdeasText.split(',').map(s => s.trim()).filter(Boolean) : [];
+                if (charIdeas.length > 0) {
+                    const initialCharPromises = charIdeas.slice(0, 2).map(idea => aiService.generateImageWithStabilityAI(`Cute cartoon illustration of ${idea}, for a children's game.`, 'png', '1:1').catch(e => null));
+                    initialCharUris = (await Promise.all(initialCharPromises)).filter(Boolean);
+                }
             }
 
-            // --- Save Elements ---
-            const savedFrontElements = await Element.insertMany(cardFrontElementDocsData);
-            const savedBackElements = await Element.insertMany(cardBackElementDocsData);
-
-            // --- Create and Save Card ---
-            const cardToSave = new Card({
-                _id: tempCardId,
-                name: `${savedBox.name} - Card ${i + 1}`,
-                boxId: savedBox._id,
-                userId: savedBox.userId,
-                isGuestCard: isGuest,
-                orderInBox: i,
-                widthPx: defaultCardWidthPx,
-                heightPx: defaultCardHeightPx,
-                cardFrontElementIds: savedFrontElements.map(el => el._id),
-                cardBackElementIds: savedBackElements.map(el => el._id),
-                metadata: {
-                    aiFrontImagePromptUsed: imageGenPromptForStability,
-                    aiTextPromptUsed: textListPromptForGemini,
-                    frontImageSource: aiFrontImageGeneratedSuccessfully ? 'ai' : (fallbackFrontImageBase64DataUri ? 'frontend_fallback' : 'backend_placeholder'),
-                    imageGenerationStatus: imageGenError || "Success",
-                    textGenerationStatus: textGenError || "Success"
+            let refinedCharacterUris = [];
+            if(canUseBgRemoval && initialCharUris.length > 0){
+                const charBgRemovalPromises = initialCharUris.map(uri => aiService.removeBackgroundWithPixian(Buffer.from(uri.split(',')[1], 'base64')).catch(e => null));
+                refinedCharacterUris = (await Promise.all(charBgRemovalPromises)).filter(Boolean);
+                if (refinedCharacterUris.length === 0) {
+                    refinedCharacterUris = initialCharUris;
+                }
+            } else {
+                refinedCharacterUris = initialCharUris;
+            }
+            
+            const tempCardId = new mongoose.Types.ObjectId();
+            const cardFrontElementDocsData = [];
+            
+            if (sharedBackgroundUri) { cardFrontElementDocsData.push({ type: 'image', imageUrl: sharedBackgroundUri, zIndex: 0, x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx }); }
+            
+            refinedDecorativeUris.forEach(uri => {
+                for (let j = 0; j < 4; j++) { // Create 4 copies of each decorative element
+                    const decorativeSize = Math.random() * 15 + 15;
+                    cardFrontElementDocsData.push({ type: 'image', imageUrl: uri, zIndex: 1, x: Math.random() * (defaultCardWidthPx - decorativeSize), y: Math.random() * (defaultCardHeightPx - decorativeSize), width: decorativeSize, height: decorativeSize, rotation: Math.random() * 360 });
                 }
             });
-            const savedCard = await cardToSave.save();
 
-            // --- Prepare card for the final response object ---
+            const charSize = defaultCardWidthPx * 0.4;
+            if (refinedCharacterUris[0]) cardFrontElementDocsData.push({ type: 'image', imageUrl: refinedCharacterUris[0], zIndex: 2, x: 20, y: defaultCardHeightPx - charSize - 20, width: charSize, height: charSize });
+            if (refinedCharacterUris[1]) cardFrontElementDocsData.push({ type: 'image', imageUrl: refinedCharacterUris[1], zIndex: 2, x: defaultCardWidthPx - charSize - 20, y: defaultCardHeightPx - charSize - 20, width: charSize, height: charSize });
+
+            const questionBoxHeight = 100;
+            cardFrontElementDocsData.push({ type: 'shape', shapeType: 'rectangle', zIndex: 3, x: 40, y: 150, width: defaultCardWidthPx - 80, height: questionBoxHeight, fillColor: 'rgba(255, 255, 255, 0.9)', borderRadius: 20 });
+            cardFrontElementDocsData.push({ type: 'text', content: finalBoxName, zIndex: 4, x: 0, y: 40, width: defaultCardWidthPx, height: 60, color: '#5C3A92', textAlign: 'center', fontSize: "35px", fontFamily: "Arial Rounded MT Bold, sans-serif", fontWeight: 'bold' });
+            cardFrontElementDocsData.push({ type: 'text', content: individualCardText, zIndex: 4, x: 50, y: 155, width: defaultCardWidthPx - 100, height: questionBoxHeight - 10, color: '#333333', textAlign: 'center', fontSize: "20px", fontFamily: "Arial, sans-serif" });
+
+            const elementsToCreate = cardFrontElementDocsData.map(el => ({ ...el, cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: userId, isFrontElement: true }));
+            const savedFrontElements = await Element.insertMany(elementsToCreate);
+
+            const cardToSave = new Card({ _id: tempCardId, name: `${finalBoxName} - Card ${i + 1}`, boxId: savedBox._id, userId: userId, isGuestCard: isGuest, orderInBox: i, widthPx: defaultCardWidthPx, heightPx: defaultCardHeightPx, cardFrontElementIds: savedFrontElements.map(el => el._id), cardBackElementIds: [] });
+            const savedCard = await cardToSave.save();
             const cardForResponse = savedCard.toObject();
             cardForResponse.cardFrontElements = savedFrontElements.map(el => el.toObject());
-            cardForResponse.cardBackElements = savedBackElements.map(el => el.toObject());
             generatedCardsDataForResponse.push(cardForResponse);
         }
 
-
-        // --- 7. Construct and Send Final Response ---
+        // --- PHASE 5: Construct and Send Final Response ---
         const boxResponseObject = savedBox.toObject();
         boxResponseObject.cards = generatedCardsDataForResponse;
+        successResponse(res, `Box "${savedBox.name}" and ${generatedCardsDataForResponse.length} cards created.`, { box: boxResponseObject }, 201);
 
-        const responseData = {
-            box: boxResponseObject,
-            imageWasAIgenerated: aiFrontImageGeneratedSuccessfully,
-            textListWasGenerated: textListGeneratedSuccessfully,
-            rawText: generatedTextListData || ""
-        };
-
-        successResponse(res, `Box "${savedBox.name}" and ${generatedCardsDataForResponse.length} cards created.`, responseData, 201);
-
-     } catch (error) {
-        console.error("Error in generateNewDeckAndBox Controller:", error.message, error.stack);
+    } catch (error) {
+        console.error("Error in generateNewDeckAndBox Controller:", error);
         errorResponse(res, "Error generating new deck and box.", 500, "DECK_GENERATION_FAILED", error.message);
-     }
+    }
+    console.log("CONTROLLER: generateNewDeckAndBox finished.");
+};
+
+// --- THE COMPLETE, FINAL, ROBUST-FALLBACK DECK GENERATION FUNCTION ---
+exports.generateNewDeckAndBoxOld = async (req, res) => {
+    console.log("BOX_CONTROLLER: generateNewDeckAndBox (Robust Fallback Strategy) started.");
+    try {
+        const {
+            boxName, boxDescription = "", userPrompt, genre = "Educational",
+            accentColorHex = "#333333", defaultCardWidthPx = 315,
+            defaultCardHeightPx = 440, imageAspectRatioForDeck = null,
+            imageOutputFormatForDeck = "png", numCardsInDeck = 1,
+            fallbackBackgroundUri = null,
+            fallbackCharacterUris = [],
+            fallbackDecorativeUris = []
+        } = req.body;
+
+
+        let userId = null;
+        let isGuest = true;
+        let token;
+        // THIS IS A MANUAL AUTHENTICATION CHECK
+        if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+            token = req.headers.authorization.split(' ')[1];
+            try {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                const user = await User.findById(decoded.id);
+                if (user) {
+                    userId = user._id;
+                    isGuest = false; // <-- This line SHOULD run for an auth'd user
+                }
+            } catch (err) {
+                // If an error happens (e.g., expired token), it proceeds as a guest
+                console.log('Optional token check failed, proceeding as guest:', err.message);
+            }
+        }
+
+        // const userId = req.user ? req.user.id : null;
+        // const isGuest = !userId;
+        const canUseStabilityAI = !!process.env.STABILITY_API_KEY;
+        const canUseBgRemoval = !!process.env.PIXIAN_API_KEY && !!process.env.PIXIAN_API_SECRET;
+
+        if (!boxName || !userPrompt) { return errorResponse(res, "Box name and prompt are required.", 400); }
+
+        // --- PHASE 1: AI BRAINSTORMING ---
+        const textListPrompt = `Generate a list of ${numCardsInDeck} unique, concise questions about: "${userPrompt}".`;
+        const sharedPromises = [
+            aiService.generateTextWithGemini(textListPrompt, undefined, CONCISE_DUMMY_DATA_SYSTEM_INSTRUCTION),
+            aiService.generateTextWithGemini(userPrompt, undefined, CARD_TITLE_SYSTEM_INSTRUCTION),
+            aiService.generateTextWithGemini(userPrompt, undefined, DECORATIVE_ELEMENT_IDEAS_SYSTEM_INSTRUCTION)
+        ];
+        const [ textListData, title, decorativeIdeasText ] = await Promise.all(sharedPromises);
+        let textItemsArray = (textListData || '').split('\n').map(item => item.trim()).filter(Boolean);
+        while (textItemsArray.length < numCardsInDeck) { textItemsArray.push(`[Problem ${textItemsArray.length + 1}]`); }
+        const cardTitle = title.trim() || "Fun Adventure";
+        const decorativeIdeas = decorativeIdeasText.split(',').map(s => s.trim()).filter(Boolean);
+        
+        const supportedRatios = [{ string: "2:3", value: 2/3 }, { string: "3:2", value: 3/2 }, { string: "1:1", value: 1/1 }];
+        const finalAspectRatioForAI = getClosestSupportedAspectRatio(defaultCardWidthPx, defaultCardHeightPx, supportedRatios);
+
+        // --- PHASE 2: GATHER & REFINE SHARED ELEMENTS ---
+        let sharedBackgroundUri = fallbackBackgroundUri;
+        let initialDecorativeUris = fallbackDecorativeUris;
+
+        if (canUseStabilityAI) {
+            if (!sharedBackgroundUri) {
+                const backgroundPrompt = `A simple, clean, vibrant, colorful gradient background for a children's flashcard about "${userPrompt}". No objects, no text, no patterns.`;
+                sharedBackgroundUri = await aiService.generateImageWithStabilityAI(backgroundPrompt, imageOutputFormatForDeck, finalAspectRatioForAI);
+            }
+            if (initialDecorativeUris.length === 0) {
+                const decorativePromises = decorativeIdeas.map(idea => aiService.generateImageWithStabilityAI(`A single, cute, small cartoon ${idea}, sticker style.`, 'png', '1:1').catch(e => null));
+                initialDecorativeUris = await Promise.all(decorativePromises);
+            }
+        }
+        
+        let refinedDecorativeUris = [];
+        if (canUseBgRemoval && initialDecorativeUris.length > 0) {
+            console.log("Refining decorative element images...");
+            const bgRemovalPromises = initialDecorativeUris.filter(Boolean).map(uri => aiService.removeBackgroundWithPixian(Buffer.from(uri.split(',')[1], 'base64')));
+            refinedDecorativeUris = await Promise.all(bgRemovalPromises);
+            // --- FIX IS HERE: If refinement failed, fall back to the unrefined images ---
+            if (refinedDecorativeUris.every(uri => uri === null)) {
+                console.warn("Background removal for all decorative elements failed. Using original images as fallback.");
+                refinedDecorativeUris = initialDecorativeUris;
+            }
+        } else {
+            refinedDecorativeUris = initialDecorativeUris;
+        }
+
+        // --- PHASE 3: DATABASE ASSEMBLY ---
+        const newBoxData = {
+            name: boxName.trim(), description: boxDescription, userId: userId, isGuestBox: isGuest,
+            defaultCardWidthPx: defaultCardWidthPx, defaultCardHeightPx: defaultCardHeightPx,
+            baseAISettings: { userPrompt, genre, accentColorHex, imageAspectRatio: finalAspectRatioForAI, imageOutputFormat: imageOutputFormatForDeck }
+        };
+        const savedBox = await new Box(newBoxData).save();
+        console.log("BOX_CONTROLLER: Box saved, ID:", savedBox._id);
+
+        const generatedCardsDataForResponse = [];
+        for (let i = 0; i < numCardsInDeck; i++) {
+            const individualCardText = textItemsArray[i];
+            let initialCharUris = fallbackCharacterUris;
+            
+            if (canUseStabilityAI && initialCharUris.length === 0) {
+                const charIdeasText = await aiService.generateTextWithGemini(`Text: "${individualCardText}"`, undefined, ILLUSTRATION_IDEAS_SYSTEM_INSTRUCTION);
+                const charIdeas = charIdeasText.split(',').map(s => s.trim()).filter(Boolean);
+                const initialCharPromises = charIdeas.map(idea => aiService.generateImageWithStabilityAI(`Cute cartoon illustration of ${idea}, for a children's game.`, 'png', '1:1').catch(e => null));
+                initialCharUris = await Promise.all(initialCharPromises);
+            }
+
+            let refinedCharacterUris = [];
+            if(canUseBgRemoval && initialCharUris.length > 0){
+                const charBgRemovalPromises = initialCharUris.filter(Boolean).map(uri => aiService.removeBackgroundWithPixian(Buffer.from(uri.split(',')[1], 'base64')));
+                refinedCharacterUris = await Promise.all(charBgRemovalPromises);
+                // --- FIX IS HERE: If refinement failed, fall back to the unrefined images ---
+                if (refinedCharacterUris.every(uri => uri === null)) {
+                    console.warn(`Background removal for all characters on Card ${i+1} failed. Using original images as fallback.`);
+                    refinedCharacterUris = initialCharUris;
+                }
+            } else {
+                refinedCharacterUris = initialCharUris;
+            }
+            
+            const tempCardId = new mongoose.Types.ObjectId();
+            const cardFrontElementDocsData = [];
+            
+            if (sharedBackgroundUri) { cardFrontElementDocsData.push({ type: 'image', imageUrl: sharedBackgroundUri, zIndex: 0, x: 0, y: 0, width: defaultCardWidthPx, height: defaultCardHeightPx }); }
+            
+            const copiesPerDecorativeItem = 4;
+            refinedDecorativeUris.filter(Boolean).forEach(uri => {
+                for (let j = 0; j < copiesPerDecorativeItem; j++) {
+                    const decorativeSize = Math.random() * 15 + 15;
+                    cardFrontElementDocsData.push({ type: 'image', imageUrl: uri, zIndex: 1, x: Math.random() * (defaultCardWidthPx - decorativeSize), y: Math.random() * (defaultCardHeightPx - decorativeSize), width: decorativeSize, height: decorativeSize, rotation: Math.random() * 360 });
+                }
+            });
+
+            const charSize = defaultCardWidthPx * 0.4;
+            // This logic is now simpler, as refinedCharacterUris will always hold the correct images (refined or fallback)
+            if (refinedCharacterUris[0]) cardFrontElementDocsData.push({ type: 'image', imageUrl: refinedCharacterUris[0], zIndex: 2, x: 20, y: defaultCardHeightPx - charSize - 20, width: charSize, height: charSize });
+            if (refinedCharacterUris[1]) cardFrontElementDocsData.push({ type: 'image', imageUrl: refinedCharacterUris[1], zIndex: 2, x: defaultCardWidthPx - charSize - 20, y: defaultCardHeightPx - charSize - 20, width: charSize, height: charSize });
+
+            const questionBoxHeight = 100;
+            cardFrontElementDocsData.push({ type: 'shape', shapeType: 'rectangle', zIndex: 3, x: 40, y: 150, width: defaultCardWidthPx - 80, height: questionBoxHeight, fillColor: 'rgba(255, 255, 255, 0.9)', borderRadius: 20 });
+            cardFrontElementDocsData.push({ type: 'text', content: cardTitle, zIndex: 4, x: 0, y: 40, width: defaultCardWidthPx, height: 60, color: '#5C3A92', textAlign: 'center', fontSize: "35px", fontFamily: "Arial Rounded MT Bold, Comic Sans MS, cursive, sans-serif", fontWeight: 'bold' });
+            cardFrontElementDocsData.push({ type: 'text', content: individualCardText, zIndex: 4, x: 50, y: 155, width: defaultCardWidthPx - 100, height: questionBoxHeight - 10, color: '#333333', textAlign: 'center', fontSize: "20px", fontFamily: "Arial, sans-serif" });
+
+            const elementsToCreate = cardFrontElementDocsData.map(el => ({ ...el, cardId: tempCardId, boxId: savedBox._id, isGuestElement: isGuest, userId: userId, isFrontElement: true }));
+            const savedFrontElements = await Element.insertMany(elementsToCreate);
+
+            const cardToSave = new Card({ _id: tempCardId, name: `${savedBox.name} - Card ${i + 1}`, boxId: savedBox._id, userId: userId, isGuestCard: isGuest, orderInBox: i, widthPx: defaultCardWidthPx, heightPx: defaultCardHeightPx, cardFrontElementIds: savedFrontElements.map(el => el._id), cardBackElementIds: [] });
+            const savedCard = await cardToSave.save();
+            const cardForResponse = savedCard.toObject();
+            cardForResponse.cardFrontElements = savedFrontElements.map(el => el.toObject());
+            generatedCardsDataForResponse.push(cardForResponse);
+        }
+
+        const boxResponseObject = savedBox.toObject();
+        boxResponseObject.cards = generatedCardsDataForResponse;
+        successResponse(res, `Box "${savedBox.name}" and ${generatedCardsDataForResponse.length} cards created with refined, editable layers.`, { box: boxResponseObject }, 201);
+
+    } catch (error) {
+        console.error("Error in generateNewDeckAndBox Controller:", error);
+        errorResponse(res, "Error generating new deck and box.", 500, "DECK_GENERATION_FAILED", error.message);
+    }
     console.log("CONTROLLER: generateNewDeckAndBox finished.");
 };
 
@@ -815,5 +965,88 @@ exports.deleteBoxElement = async (req, res) => {
         successResponse(res, "Box element deleted.", responseBox);
     } catch (error) {
         errorResponse(res, "Error deleting box element.", 500, error.message);
+    }
+};
+
+/**
+ * @desc    Toggle the public sharing status of a box and return a shareable link.
+ * @route   PUT /api/boxes/:boxId/toggle-public
+ * @access  Private
+ */
+exports.togglePublicStatus = async (req, res) => {
+    try {
+        const { boxId } = req.params;
+        const userId = req.user.id;
+
+        const box = await Box.findOne({ _id: boxId, userId: userId });
+
+        if (!box) {
+            return errorResponse(res, "Box not found or you are not authorized to modify it.", 404);
+        }
+
+        // Flip the boolean status
+        box.isPublic = !box.isPublic;
+        await box.save();
+
+        let message = "Box is now private.";
+        let shareableLink = null;
+
+        // If the box was just made public, construct the link.
+        if (box.isPublic) {
+            message = "Box is now publicly shareable.";
+            if (process.env.FRONTEND_BASE_URL) {
+                // Construct the link using the base URL from the .env file.
+                shareableLink = `${process.env.FRONTEND_BASE_URL}/boxes/view-box/${box._id}`;
+            } else {
+                console.warn("FRONTEND_BASE_URL is not set in .env file. Cannot generate shareable link.");
+            }
+        }
+
+        successResponse(res, message, {
+            isPublic: box.isPublic,
+            shareableLink: shareableLink // This will be the link or null
+        });
+
+    } catch (error) {
+        errorResponse(res, "Failed to update public status.", 500, "TOGGLE_PUBLIC_FAILED", error.message);
+    }
+};
+
+/**
+ * @desc    Get a single publicly shared box's details.
+ * @route   GET /api/boxes/public/:boxId
+ * @access  Public
+ */
+exports.getPublicBox = async (req, res) => {
+    try {
+        const { boxId } = req.params;
+
+        // Find the box by its ID but ONLY if its 'isPublic' flag is set to true.
+        // This prevents private boxes from ever being fetched through this public endpoint.
+        const box = await Box.findOne({ _id: boxId, isPublic: true })
+            .populate('boxFrontElementIds')
+            .populate('boxBackElementIds')
+            .lean();
+
+        if (!box) {
+            return errorResponse(res, "This box is not public or does not exist.", 404);
+        }
+
+        // Also fetch the cards associated with this public box
+        const cards = await Card.find({ boxId: box._id })
+            .populate('cardFrontElementIds')
+            .populate('cardBackElementIds')
+            .sort({ orderInBox: 1 })
+            .lean();
+            
+        const responseData = {
+            box,
+            cards
+        };
+
+        successResponse(res, "Public box data retrieved successfully.", responseData);
+
+    } catch (error) {
+        errorResponse(res, "Failed to retrieve public box data.", 500, "GET_PUBLIC_BOX_FAILED", error.message);
     }
 };

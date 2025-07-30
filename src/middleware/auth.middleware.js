@@ -27,6 +27,23 @@ exports.protect = async (req, res, next) => {
         if (!req.user) { // Check if user still exists
             return res.status(401).json({ success: false, message: 'Not authorized (user not found)' });
         }
+
+        // --- NEW: CHECK USER STATUS ON EVERY PROTECTED REQUEST ---
+        if (req.user.status === 'banned') {
+            return res.status(403).json({ success: false, message: 'Access denied. Your account is banned.' });
+        }
+        if (req.user.status === 'suspended') {
+            if (req.user.suspensionExpiresAt && req.user.suspensionExpiresAt > new Date()) {
+                return res.status(403).json({ success: false, message: `Access denied. Your account is suspended until ${req.user.suspensionExpiresAt.toLocaleString()}.` });
+            } else if (req.user.suspensionExpiresAt) {
+                // If suspension expired, reactivate them on their next API call
+                req.user.status = 'active';
+                req.user.suspensionExpiresAt = null;
+                await req.user.save({ validateBeforeSave: false });
+            }
+        }
+        // --- END OF NEW CHECK ---
+
         next();
     } catch (err) {
         console.error("Auth middleware error:", err.message);
@@ -34,6 +51,8 @@ exports.protect = async (req, res, next) => {
     }
 };
 
+
+// ... (optionalProtect and authorize remain the same)
 exports.optionalProtect = async (req, res, next) => {
     let token;
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
@@ -49,6 +68,7 @@ exports.optionalProtect = async (req, res, next) => {
     }
     next();
 };
+
 
 // Grant access to specific roles (example)
 exports.authorize = (...roles) => {

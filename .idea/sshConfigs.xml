@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig host="52.203.31.162" id="742f8d75-3b0f-4f49-bf8b-b358e5b35fc4" keyPath="C:\Users\shahb\Downloads\ai-powered-card-ec2-key.pem" port="22" nameFormat="DESCRIPTIVE" username="ubuntu" useOpenSSHConfig="true" />
+    </configs>
+  </component>
+</project>
