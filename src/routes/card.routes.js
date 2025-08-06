@@ -24,11 +24,11 @@ router.post('/box/:boxId', cardController.createCardInBox);
 
 // Update card details (name, orderInBox) - elements are handled separately
 // LINE A: Protected. Modifying card details should require ownership.
-router.put('/:cardId', authMiddleware.protect, cardController.updateCardDetails);
+router.put('/:cardId', cardController.updateCardDetails);
 
 // Delete a card
 // LINE B: Protected. Deleting a card (and its elements) should require ownership.
-router.delete('/:cardId', authMiddleware.protect, cardController.deleteCard);
+router.delete('/:cardId', cardController.deleteCard);
 
 // --- Routes for Card Elements ---
 // Add an element to a card's front or back
@@ -44,14 +44,14 @@ router.post('/:cardId/elements', cardController.addCardElement); // Controller h
 // Update an existing element on a card's front or back
 // LINE D: Protected. Modifying an element should require ownership of the element (and thus its card/box).
 //         The controller (updateCardElement) should verify element.userId.
-router.put('/elements/:elementId', authMiddleware.protect, cardController.updateCardElement);
+router.put('/elements/:elementId', cardController.updateCardElement);
 // Note: The route is /elements/:elementId which is fine if elementId is globally unique.
 // If you want to scope it to a card (e.g. /cards/:cardId/elements/:elementId), adjust accordingly,
 // though direct update via elementId with ownership check is also common. My controller assumed /elements/:elementId
 
 // Delete an element from a card's front or back
 // LINE E: Protected. Deleting an element should require ownership.
-router.delete('/:cardId/elements/:elementId', authMiddleware.protect, cardController.deleteCardElement);
+router.delete('/:cardId/elements/:elementId',  cardController.deleteCardElement);
 
 // AI Text Generation for a specific card field
 // LINE F: This depends on the nature of the action.
